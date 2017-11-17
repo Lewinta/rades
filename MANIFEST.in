@@ -1,0 +1,18 @@
+include MANIFEST.in
+include requirements.txt
+include *.json
+include *.md
+include *.py
+include *.txt
+recursive-include rades *.css
+recursive-include rades *.csv
+recursive-include rades *.html
+recursive-include rades *.ico
+recursive-include rades *.js
+recursive-include rades *.json
+recursive-include rades *.md
+recursive-include rades *.png
+recursive-include rades *.py
+recursive-include rades *.svg
+recursive-include rades *.txt
+recursive-exclude rades *.pyc
