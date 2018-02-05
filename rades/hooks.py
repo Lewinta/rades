@@ -15,8 +15,8 @@ app_license = "MIT"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/rades/css/rades.css"
-# app_include_js = "/assets/rades/js/rades.js"
+app_include_css = "/assets/rades/css/rades.css"
+app_include_js = "/assets/rades/js/rades.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/rades/css/rades.css"
@@ -26,8 +26,22 @@ app_license = "MIT"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_js = {
+	"Customer" : "public/js/customer.js",
+	"Sales Invoice" : "public/js/sales_invoice.js"
+}
+
+doctype_list_js = {
+	"Customer" : "public/js/customer_list.js",
+	"Sales Invoice" : "public/js/sales_invoice_list.js",
+	"Medico" : "public/js/medico.js",
+	"Account" : "public/js/account.js",
+	"Custom Script" : "public/js/custom_script.js",
+	"Item" : "public/js/item.js",
+	"Supplier" : "public/js/supplier.js"
+
+}
+
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -79,14 +93,23 @@ app_license = "MIT"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-#	}
-# }
+doc_events = {
+	"Sales Invoice": {
+		"autoname": "rades.sales_invoice.autoname",
+		"on_submit": "rades.sales_invoice.on_submit",
+		"on_cancel": "rades.sales_invoice.on_cancel",
+	},
+	"Customer": {
+		"after_insert": "rades.customer.after_insert",
+		"on_trash": "rades.customer.on_trash"
+	}
+}
 
+scheduler_events = {
+	"daily": [
+		"rades.backup.daily"
+	]
+}
 # Scheduled Tasks
 # ---------------
 
@@ -120,3 +143,4 @@ app_license = "MIT"
 # 	"frappe.desk.doctype.event.event.get_events": "rades.event.get_events"
 # }
 
+boot_session = "rades.boot.boot_session"
