@@ -23,6 +23,11 @@ def customer_ars_query(doctype, txt, searchfield, start, page_len, filters):
 
 def item_by_ars(doctype, txt, searchfield, start, page_len, filters):
 
+	if not filters.get("ars"): 
+		return frappe.get_list("Item", filters={
+			"item_code": ["not in", "Consultas, ALQUILER"]
+		}, fields=["item_code"], as_list=True)
+
 	result = frappe.db.sql("""
 		SELECT
 			item_code AS item,

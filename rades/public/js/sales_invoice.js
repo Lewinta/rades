@@ -8,7 +8,6 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	"refresh": (frm) => {
 		refresh_field("cobertura");
-
 		frappe.run_serially([
 			() => frappe.timeout(1),
 			() => frm.trigger("hide_dashboard"),
@@ -17,10 +16,27 @@ frappe.ui.form.on("Sales Invoice", {
 
 	},
 	"validate": (frm) => {
-		if(frm.doc.paid_amount != frm.doc.grand_total){
+		if (frm.doc.paid_amount != frm.doc.grand_total){
 			frappe.msgprint("Favor verificar que el monto recibido $"+ frm.doc.paid_amount +" sea igual al facturado $"+ frm.doc.grand_total)
 			validated = false;
 		}
+
+		let opts = {
+			"method": "dgii.api.validate_ncf_limit"
+		};
+		
+		opts.args = {
+			"serie": frm.doc.naming_series
+		};
+		
+		frappe.call(opts).done((response) =>{
+			let doc = response.message;
+		
+			if (!doc) {
+				frappe.msgprint("No hay mas comprobantes disponibles para esta serie");
+				validated = false;
+			}
+		}).fail(() => frappe.msgprint("¡Ha ocurrido un error!"));
 
 	},
 	"onload_post_render": (frm) => { 
@@ -36,12 +52,12 @@ frappe.ui.form.on("Sales Invoice", {
 			frm.set_query("customer", () => {
 				let condition = ["in", "Clientes"]
 
-				if (frm.doc.tipo_de_factura == "Proveedores"){
+				if (frm.doc.tipo_de_factura == "Proveedores") {
 					condition = ["in", "Proveedores"]
-				} else if (frm.doc.tipo_de_factura == "Alquiler"){
+				} else if (frm.doc.tipo_de_factura == "Alquiler") {
 					condition = ["in", "Alquiler"]
-
 				}
+
 				return {
 					"query": "erpnext.controllers.queries.customer_query",
 					"filters": {
@@ -52,7 +68,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 
 			frm.set_query("item_code", "items", () => {
-				if (frm.doc.tipo_de_factura == "Clientes Seguros" || frm.doc.tipo_de_factura == "Meds") {
+				if (["Clientes Seguros", "Meds", "Servimerd"].includes(frm.doc.tipo_de_factura)) {
 					return {
 						"query": "rades.queries.item_by_ars",
 						"filters": {
@@ -80,6 +96,12 @@ frappe.ui.form.on("Sales Invoice", {
 		if ( frm.doc.tipo_de_factura == "Clientes Seguros" && !frm.doc.autorization) {
 			frappe.throw("¡Necesita el numero de autorización para poder validar este documento!");
 		}
+		if ( frm.doc.tipo_de_factura == "Servimerd" && frm.doc.nss && !frm.doc.autorization) {
+			frappe.throw("¡Necesita el numero de autorización para poder validar este documento!");
+		}
+		if ( frm.doc.tipo_de_factura == "Servimerd" && frm.doc.nss && !frm.doc.medico) {
+			frappe.throw("¡Necesita el Medico para poder validar este documento!");
+		}
 	},
 	before_cancel: (frm) => {
         validated = false;
@@ -102,11 +124,22 @@ frappe.ui.form.on("Sales Invoice", {
             update_fields, "Elija el motivo de la cancelacion", "Continuar");
 
         function update_fields(response) {
-            cur_frm.doc.tipo_de_anulacion = response.opts;
-            cur_frm._save("Update", () => {
-                cur_frm.save("Cancel");
+            frm.doc.tipo_de_anulacion = response.opts;
+            frm._save("Update", () => {
+                frm.save("Cancel");
             });
         }
+    },
+    "posting_date": (frm) => {
+    	frm.clear_table("payments");
+
+    	frm.add_child("payments",{"mode_of_payment":"Seguro"})
+		frm.add_child("payments",{"mode_of_payment":"Efectivo"})
+				
+		if (es_jueves(frm)) 
+			frm.add_child("payments",{"mode_of_payment":"Co-Pago"});
+
+		refresh_field("payments");
     },
 	"tipo_de_factura": (frm) => {
 		$.map(["customer", "nss", "ars", "tax_id"], (field) => {
@@ -117,13 +150,21 @@ frappe.ui.form.on("Sales Invoice", {
 		frm.set_value("referido", 0)
 
 		if (frm.doc.tipo_de_factura == "Clientes Seguros") {
-			if(frm.is_new()) {
+			if (frm.is_new()) {
 				frm.set_value("cobertura", frappe.boot.conf.autorizado_por_seguros);
-				frm.add_child("payments",{"mode_of_payment":"Seguro"})
-				frm.add_child("payments",{"mode_of_payment":"Efectivo"})
+				frm.add_child("payments", {
+					"mode_of_payment": "Seguro"
+				});
+
+				frm.add_child("payments", {
+					"mode_of_payment": "Efectivo"
+				});
 				
-				if (es_jueves()) 
-					frm.add_child("payments",{"mode_of_payment":"Co-Pago"});
+				if (es_jueves(frm)) {
+					frm.add_child("payments", {
+						"mode_of_payment": "Co-Pago"
+					});
+				}
 			}
 		} else if (frm.doc.tipo_de_factura == "Meds") {
 			let fields_dict = {
@@ -135,17 +176,32 @@ frappe.ui.form.on("Sales Invoice", {
 			$.each(fields_dict, (field, value) => {
 				frm.set_value(field, value);
 			});
-			frm.add_child("payments",{"mode_of_payment":"Meds"})
-		}
-		else {
+
+			frm.add_child("payments", {
+				"mode_of_payment": "Meds"
+			});
+		} else if (frm.doc.tipo_de_factura == "Servimerd") {
+			let fields_dict = {
+				"cobertura": frappe.boot.conf.autorizado_por_seguros,
+				// "ars": frm.doc.tipo_de_factura,
+				// "nss": null
+			};
+
+			$.each(fields_dict, (field, value) => {
+				frm.set_value(field, value);
+			});
+
+			frm.add_child("payments", {
+				"mode_of_payment": "Servimerd"
+			});
+
+		} else {
 			frm.is_new() && frm.set_value("cobertura", undefined);
 			frm.add_child("payments",{"mode_of_payment":"Efectivo"})
 		}
 		refresh_field("payments");
 
-		frm.set_value("naming_series", frm.doc.tipo_de_factura == "Proveedores" || frm.doc.tipo_de_factura == "Alquiler" ? "A0100100101.########" : "A0100100102.########");
-
-		frm.toggle_reqd(["cobertura"], frm.doc.tipo_de_factura == "Clientes Seguros");
+		frm.set_value("naming_series", frm.doc.tipo_de_factura == "Proveedores" || frm.doc.tipo_de_factura == "Alquiler" ? "B01.########" : "B02.########");
 	},
 	"show_prompt": (frm) => {
 		frm.$wrapper.hide();
@@ -154,7 +210,7 @@ frappe.ui.form.on("Sales Invoice", {
 			"label": "Tipo de Factura", 
 			"fieldname": "tipo_de_factura", 
 			"fieldtype": "Select", 
-			"options": "Clientes Privados\nClientes Seguros\nAlquiler\nProveedores\nMeds",
+			"options": "Clientes Privados\nClientes Seguros\nAlquiler\nProveedores\nServimerd\nMeds",
 			"reqd": "1"
 		}];
 
@@ -167,7 +223,6 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	"referido": (frm) => {
 		if (frm.doc.referido && frm.doc.items){
-			console.log("necesitas recorrer todos los items y agregarle el descuento")
 		}
 	},
 	"customer": (frm) => {	frappe.run_serially([
@@ -184,12 +239,37 @@ frappe.ui.form.on("Sales Invoice", {
 					frm.toggle_display("ars", true);
 				});
 			}
+			if (frm.doc.tipo_de_factura == "Servimerd") {
+				let fieldlist = ["nss", "ars"];
+
+				frappe.db.get_value("Customer", frm.doc.customer, fieldlist, (data) => {
+					$.each(data, (key, value) => frm.set_value(key, value));
+					frm.toggle_display("ars", true);
+					frm.clear_table("payments");
+					
+					if ( ! (frm.doc.ars && frm.doc.nss)) {
+						$.map(fieldlist, (field) => frm.set_value(field, undefined));
+						frm.set_value("selling_price_list", "Venta estándar");
+						frm.set_value("cobertura", 0);
+						frm.add_child("payments", {
+							"mode_of_payment": "Servimerd"
+						});
+					} else {
+						$.map(["Seguro", "Servimerd"], (mode) => {
+							frm.add_child("payments", {
+								"mode_of_payment": mode
+							});
+						});
+						
+						frm.set_value("cobertura", frappe.boot.conf.autorizado_por_seguros);
+					}
+				});
+			}
 
 			if (frm.doc.tipo_de_factura == "Clientes Privados") {
 				let fields_dict = {
 					"cobertura": 0,
 					"ars": null,
-					"selling_price_list": "Venta estándar",
 					"nss": null,
 				};
 
@@ -231,13 +311,14 @@ frappe.ui.form.on("Sales Invoice", {
 					"target": frm,
 					"date_field": "posting_date",
 					"setters": {
-						"ars": frm.doc.customer || undefined
+						"ars": frm.doc.customer == "SERVIMERD" ? undefined: frm.doc.customer,
+						"tipo_de_factura": frm.doc.customer == "SERVIMERD" ? "Servimerd": undefined
 					},
 					"get_query": () => {
 						return { 
 							"filters": { 
 								"customer_group": "Clientes", 
-								"tipo_de_factura": ["in", "Clientes Seguros, Meds"],
+								"tipo_de_factura": ["in", "Clientes Seguros, Meds, Servimerd"],
 								"payment_status": "UNPAID",
 								"docstatus": 1
 							} 
@@ -304,11 +385,10 @@ frappe.ui.form.on("Sales Invoice", {
 			() => cobertura = flt(row.cobertura) / 100.000,
 			() => row.authorized_amount = porciento ? row.rate * cobertura : 0,
 			() => row.claimed_amount = porciento ? row.rate : 0 ,
-			() => row.difference_amount = has_clearance(row) && es_jueves() ? 0 : row.rate - row.authorized_amount,
-			() => row.copago = has_clearance(row) && es_jueves() ? row.rate - row.authorized_amount : 0,
+			() => row.difference_amount = aplicar_copago(row, frm) ? 0 : row.rate - row.authorized_amount,
+			() => row.copago = aplicar_copago(row, frm) ? row.rate - row.authorized_amount : 0,
 			() => refresh_field("items"),
 			() => frm.trigger("refresh_outside_amounts"),
-			
 		])
 
 	},
@@ -326,8 +406,9 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	"ars": (frm) => {
 		frm.doc.ars && frm.set_value("selling_price_list", frm.doc.ars);
-		if (frm.doc.ars == "ARS UNIVERSAL")
+		if (frm.doc.ars == "ARS UNIVERSAL") {
 			frm.set_value("cobertura", 45);
+		}
 	}
 });
 
@@ -339,18 +420,21 @@ frappe.ui.form.on("Sales Invoice Item", {
 			frappe.run_serially([
 				() => row = frappe.get_doc(cdt, cdn),
 				() => frappe.timeout(0.5),
-				() => console.log(row.item_code),
 				() => nuevo_descuento = get_discount(row),
-				() => console.log(nuevo_descuento),
 				() => frappe.model.set_value(cdt, cdn, "discount_percentage", nuevo_descuento)
-
 			]);
 		}
 
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
 			() => condition && frm.events.item_table_update(frm, cdt, cdn),
+			() => frappe.timeout(1.3),
+			() => frm.cscript.calculate_paid_amount(),
+			() => frm.refresh_fields()
 		]);
+	},
+	"items_remove": (frm, cdt, cdn) => {
+		frm.trigger("refresh_outside_amounts");
 	},
 	"discount_percentage": (frm, cdt, cdn) => {
 		frappe.run_serially([
@@ -428,6 +512,12 @@ $.extend(rades.sales_invoice, {
 			payment.amount = opts.total_authorized_amount;
 		});
 
+		$.grep(frm.doc.payments, (payment) => {
+			return payment.mode_of_payment == "Servimerd";
+		}).map((payment) => {
+			payment.amount = opts.total_difference_amount;
+		});
+
 		refresh_field("payments");
 	}
 });
@@ -478,15 +568,27 @@ function has_clearance(row){
 
 	return copago
 }
+function aplicar_copago(row, frm){
+	if (has_clearance(row) && es_jueves(frm) && frm.doc.tipo_de_factura == "Clientes Seguros" && frm.doc.ars != "ARS UNIVERSAL")
+		return true
+	else
+		return false
+}
 
 function aplicar_porciento(row){
 
-	return row.item_name.substring(0,10) != "Diferencia";
+	if (row && row.item_name)
+		return row.item_name.substring(0,10) != "Diferencia";
 }
 
-function es_jueves() {
-	let today = Date().split(" ")[0]
+function es_jueves(frm) {
+	let year = frm.doc.posting_date.split("-")[0]
+	// we have to substract 1 to the actual month since Javascript treat months from 0-11
+	let month = eval(frm.doc.posting_date.split("-")[1]) - 1
+	let day = frm.doc.posting_date.split("-")[2]
 	
-	return today == "Thu" ? true : false;
+	let weekday = new Date(year, month, day).toString().split(" ")[0]
+
+	return weekday == "Thu" ? true : false;
 }
 

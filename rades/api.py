@@ -14,9 +14,19 @@ def update_sales_invoice(doc, selections, args):
 	total = 0.000
 
 	invoices_qty = len(selections.split(","))
-	
+
+	amount_based_on = frappe.get_value("Customer", sinv.customer, "amount_based_on")
+
+
+	if amount_based_on == "Authorized Amount":
+		fieldname = "monto_autorizado"
+	elif amount_based_on == "Difference Amount":
+		fieldname = "diferencia"
+	else:
+		frappe.throw("Amount Base On is not any of the options: [Difference Amount, Authorized Amount]")
+
 	for name in selections.split(","):
-		total += frappe.get_value("Sales Invoice", name, "monto_autorizado") or 0.000
+		total += frappe.get_value("Sales Invoice", name, fieldname) or 0.000
 
 	if not frappe.get_value("Item", "Consultas"):
 		create_service_item()
