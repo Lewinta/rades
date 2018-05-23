@@ -25,7 +25,7 @@ def execute():
 		'insert_after': 'status',
 		'label': 'Tipo de Anulacion',
 		'no_copy': 0,
-		'options': '',`
+		'options': '',
 		'permlevel': 0,
 		'precision': '',
 		'print_hide': 0,
