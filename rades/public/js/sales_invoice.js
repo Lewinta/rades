@@ -555,24 +555,26 @@ function get_discount(row){
 	return porciento
 }
 
-function has_clearance(row){
-	let copago = false;
-	
-	$.grep(frappe.boot.conf.ofertas_jueves, (oferta) => {
-		
-		return oferta.item == row.item_code;
-	}).map((oferta) => {
-		if (oferta)
-			copago = true;
-	});
-
-	return copago
-}
 function aplicar_copago(row, frm){
-	if (has_clearance(row) && es_jueves(frm) && frm.doc.tipo_de_factura == "Clientes Seguros" && frm.doc.ars != "ARS UNIVERSAL")
+	// if (has_clearance(row, frm) && es_jueves(frm) && frm.doc.tipo_de_factura == "Clientes Seguros" && frm.doc.ars != "ARS UNIVERSAL")
+	if (has_clearance(row, frm) && frm.doc.tipo_de_factura == "Clientes Seguros" && frm.doc.ars != "ARS UNIVERSAL")
 		return true
 	else
 		return false
+}
+
+function has_clearance(row, frm){
+	let aplicar_descuento = false;
+	
+	$.grep(frappe.boot.conf.ofertas_jueves, (oferta) => {
+		
+		return oferta.item == row.item_code && oferta.day == get_today(frm);
+	}).map((oferta) => {
+		if (oferta)
+			aplicar_descuento = true;
+	});
+
+	return aplicar_descuento
 }
 
 function aplicar_porciento(row){
@@ -582,6 +584,11 @@ function aplicar_porciento(row){
 }
 
 function es_jueves(frm) {
+	
+	return get_today(frm) == "Thu"  ? true : false;
+}
+
+function get_today(frm){
 	let year = frm.doc.posting_date.split("-")[0]
 	// we have to substract 1 to the actual month since Javascript treat months from 0-11
 	let month = eval(frm.doc.posting_date.split("-")[1]) - 1
@@ -589,6 +596,6 @@ function es_jueves(frm) {
 	
 	let weekday = new Date(year, month, day).toString().split(" ")[0]
 
-	return weekday == "Thu" ? true : false;
+	return weekday
 }
 
