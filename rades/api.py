@@ -1,6 +1,7 @@
 import frappe
 
 import json
+from frappe.defaults import get_global_default
 
 @frappe.whitelist()
 def update_sales_invoice(doc, selections, args):
@@ -10,7 +11,7 @@ def update_sales_invoice(doc, selections, args):
 
 	# clear the items table
 	sinv.set("items", [])
-	
+
 	total = 0.000
 
 	invoices_qty = len(selections.split(","))
@@ -40,7 +41,7 @@ def update_sales_invoice(doc, selections, args):
 		"uom": "Unidad(es)",
 		"paid_sales_invoices": selections,
 		"print_qty": len(selections.split(",")),
-		"qty": 1,
+		"qty": -1 if sinv.get("is_return") else 1,
 		"print_qty": invoices_qty,
 		"rate": total,
 		"authorized_amount": total,
@@ -53,12 +54,19 @@ def update_sales_invoice(doc, selections, args):
 	return sinv.as_dict()
 
 def create_service_item():
+	default_company = get_global_default("company")
+	default_income_account = frappe.get_value(
+		"Company",
+		default_company,
+		"default_income_account"
+	)
 	item = frappe.new_doc("Item")
 
 	item.update({
 		"item_code": "Consultas",
 		"item_name": "Consultas",
 		"description": "Consultas",
+		"income_account": default_income_account,
 		"item_group": "Servicios"
 	})
 

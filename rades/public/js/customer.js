@@ -1,5 +1,7 @@
 frappe.ui.form.on("Customer", {
 	"refresh": function(frm) {
+		frm.trigger("add_toolbar_buttons");
+
 		frm.set_df_property('tipo_rnc', 'options', [{
         		"value": "1",
         		"label": "RNC"
@@ -7,6 +9,10 @@ frappe.ui.form.on("Customer", {
         	{
         		"value": "2",
         		"label": "CEDULA"
+        	},
+        	{
+        		"value": "3",
+        		"label": "PASAPORTE"
         	},
         ]);
 
@@ -41,6 +47,27 @@ frappe.ui.form.on("Customer", {
 				}
 			};
 		});
+	},
+	"add_toolbar_buttons": function (frm) {
+		var calcula_edad = function(){
+			
+			var fields = [{
+				"fieldname": "fecha_nacimiento",
+				"fieldtype": "Date",
+				"label": "Fecha de Nacimiento",
+				"default": frappe.datetime.get_today()
+			}]
+
+			var onsubmit = function(values){
+				
+				var days = frappe.datetime.get_diff(frappe.datetime.get_today(), values.fecha_nacimiento);
+				frm.set_value("edad",parseInt(days/365));
+			}
+ 
+			frappe.prompt(fields,onsubmit,'Calcular Edad del Paciente','Calcular');
+		}
+
+		frm.add_custom_button(__('Calcular Edad' ), calcula_edad);
 	},
 	"customer_name": function(frm) {
 		frm.set_value('customer_name', frm.doc.customer_name.trim().toUpperCase())

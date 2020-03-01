@@ -28,7 +28,8 @@ app_include_js = "/assets/rades/js/rades.js"
 # include js in doctype views
 doctype_js = {
 	"Customer" : "public/js/customer.js",
-	"Sales Invoice" : "public/js/sales_invoice.js"
+	"Sales Invoice" : "public/js/sales_invoice.js",
+	"Bank Reconciliation" : "public/js/bank_reconciliation.js",
 }
 
 doctype_list_js = {
@@ -108,6 +109,9 @@ doc_events = {
 scheduler_events = {
 	"daily": [
 		"rades.backup.daily"
+	],
+	"hourly": [
+		"rades.nginx.hourly"
 	]
 }
 # Scheduled Tasks
