@@ -28,6 +28,7 @@ app_include_js = "/assets/rades/js/rades.js"
 # include js in doctype views
 doctype_js = {
 	"Customer" : "public/js/customer.js",
+	"User" : "public/js/user.js",
 	"Sales Invoice" : "public/js/sales_invoice.js",
 	"Bank Reconciliation" : "public/js/bank_reconciliation.js",
 }
