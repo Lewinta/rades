@@ -100,6 +100,9 @@ frappe.ui.form.on("Customer", {
 			.addClass("octicon collapse-indicator octicon-chevron-down");
 	},
 	"validate": function(frm) {
+		if(frm.doc.customer_group == "Proveedores" && !["Administrator", "santatoribio0322@hotmail.com"].includes(frappe.session.user))
+			frappe.throw("Solo el Administrator puede modificar las ARS")
+
 		if (frm.doc.customer_group != "Clientes") {
 			var fields = ["nss", "ars", "gender", "edad"];
 			$.map(fields, function(field) {

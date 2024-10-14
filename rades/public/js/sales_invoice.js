@@ -7,7 +7,7 @@ frappe.ui.form.on("Sales Invoice", {
 		});
 	},
 	"refresh": (frm) => {
-		refresh_field("cobertura");
+		refresh_field("cobertura");	
 		frappe.run_serially([
 			() => frappe.timeout(1),
 			() => frm.trigger("hide_dashboard"),
@@ -32,10 +32,10 @@ frappe.ui.form.on("Sales Invoice", {
 		frappe.call(opts).done((response) =>{
 			let doc = response.message;
 
-			if (!doc) {
-				frappe.msgprint("No hay mas comprobantes disponibles para esta serie");
-				validated = false;
-			}
+			// if (!doc) {
+			// 	frappe.msgprint("No hay mas comprobantes disponibles para esta serie");
+			// 	validated = false;
+			// }
 		}).fail(() => frappe.msgprint("¡Ha ocurrido un error!"));
 
 	},
@@ -294,7 +294,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 frappe.ui.form.on("Sales Invoice Item", {
 	"item_code": (frm, cdt, cdn) => {
-		let condition = frm.doc.tipo_de_factura != "Alquiler" && frm.doc.tipo_de_factura != "Proveedores" ? true : false
+		let condition = frm.doc.tipo_de_factura != "Proveedores" ? true : false
 
 		if (es_referido(frm)){
 			frappe.run_serially([
@@ -309,6 +309,10 @@ frappe.ui.form.on("Sales Invoice Item", {
 			() => frappe.timeout(0.3),
 			() => condition && frm.events.item_table_update(frm, cdt, cdn),
 			() => frappe.timeout(1.3),
+			() => { if(frm.doc.tipo_de_factura == "Alquiler") {
+				frappe.model.set_value(cdt, cdn, "claimed_amount", row.rate);
+				frappe.model.set_value(cdt, cdn, "difference_amount", row.rate);
+			} },
 			() => frm.cscript.calculate_paid_amount(),
 			() => frm.refresh_fields()
 		]);
