@@ -13,6 +13,7 @@ def get_columns(filters):
 	if filters.get("summary"):
 		return [
 			"Grupo de Productos:Link/Item Group:200",
+			"Cantidad:Int:120",
 			"Reclamado:Currency:150",
 			"Autorizado:Currency:150",
 			"Cobertura:Currency:150",
@@ -32,16 +33,19 @@ def get_columns(filters):
 
 
 def get_data(filters):
+	  
 	if filters.get("summary"):
 		return get_summary_data(filters)
+	else: 
+		return get_detail_data(filters)
 
-	return get_detail_data(filters)
 
 
 def get_summary_data(filters):
 	query = frappe.db.sql("""
 		Select
 			sales_invoice_item.item_group,
+			Count(1) as qty,
 			Sum(sales_invoice_item.claimed_amount) As claimed_amount,
 			Sum(sales_invoice_item.authorized_amount) As authorized_amount,
 			Sum(sales_invoice_item.cobertura) As cobertura,
@@ -92,9 +96,6 @@ def get_filters(filters):
 		query.append(
 			'sales_invoice.posting_date Between %(from_date)s And %(to_date)s'
 		)
-
-	if filters.get("customer"):
-		query.append('sales_invoice.customer = %(customer)s')
 
 	if filters.get("item_group"):
 		query.append('sales_invoice_item.item_group = %(item_group)s')
