@@ -18,9 +18,6 @@ frappe.ui.form.on("Sales Invoice", {
 		frm.toggle_enable("ncf", show);
 		
 	},
-	"onload_post_render": (frm) => {
-		frm.trigger("set_queries");
-	},
 	"validate": (frm) => {
 		const no_verif = ["Clientes Privados", "Clientes Seguros"]
 
@@ -105,6 +102,8 @@ frappe.ui.form.on("Sales Invoice", {
 		frm.is_new() && frm.trigger("customer");
 		frm.is_new() && !frm.doc.is_return && frm.trigger("show_prompt");
 		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
+
+		frm.trigger("set_queries");
 	},
 	"tipo_de_factura": (frm) => {
 		// The customer query depends on tipo_de_factura, so any previously
