@@ -5,19 +5,21 @@ frappe.ui.form.on("Sales Invoice", {
 		$.each({"ars": "ars", "nss": "nss"}, (key, value) => {
 			frm.add_fetch("_customer", key, value);
 		});
-		frm.trigger("set_queries");
 	},
 	"refresh": (frm) => {
 		refresh_field("cobertura");	
 		frappe.run_serially([
 			() => frappe.timeout(1),
 			() => frm.trigger("hide_dashboard"),
-         	() => frm.is_new() && frm.trigger("cobertura"),
-         	() => frm.trigger("add_custom_button")
+			() => frm.is_new() && frm.trigger("cobertura"),
+			() => frm.trigger("add_custom_button")
 		]);
 		let show = frappe.user.has_role("Accounts Manager");
 		frm.toggle_enable("ncf", show);
-
+		
+	},
+	"onload_post_render": (frm) => {
+		frm.trigger("set_queries");
 	},
 	"validate": (frm) => {
 		const no_verif = ["Clientes Privados", "Clientes Seguros"]
