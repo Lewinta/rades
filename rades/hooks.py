@@ -50,6 +50,25 @@ doctype_list_js = {
 # Home Pages
 # ----------
 
+fixtures = [
+	{
+		"doctype": "Custom Field",
+		"filters": {
+			"module": "Rades",
+		}
+	},
+	{
+		"doctype": "Property Setter",
+		"filters": {
+			"module": "Rades",
+		}
+	},
+
+]
+
+# Home Pages
+# ----------
+
 # application home page (will override Website Settings)
 # home_page = "login"
 

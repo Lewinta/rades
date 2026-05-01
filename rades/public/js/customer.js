@@ -41,7 +41,7 @@ frappe.ui.form.on("Customer", {
 	"onload_post_render": function(frm) {
 		frm.set_query("ars", function(){
 			return {
-				"query": "erpnext.controllers.queries.customer_query",
+				"query": "rades.queries.customer_query",
 				"filters": {
 					"customer_group": "Proveedores"
 				}

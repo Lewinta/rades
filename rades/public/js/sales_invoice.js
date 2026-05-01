@@ -5,6 +5,7 @@ frappe.ui.form.on("Sales Invoice", {
 		$.each({"ars": "ars", "nss": "nss"}, (key, value) => {
 			frm.add_fetch("_customer", key, value);
 		});
+		frm.trigger("set_queries");
 	},
 	"refresh": (frm) => {
 		refresh_field("cobertura");	
@@ -39,17 +40,59 @@ frappe.ui.form.on("Sales Invoice", {
 		}).fail(() => frappe.msgprint("¡Ha ocurrido un error!"));
 
 	},
+	set_queries: (frm) => {
+		frm.set_query("customer", () => {
+			const group_by_tipo = {
+				"Proveedores": "Proveedores",
+				"Alquiler": "Alquiler",
+			};
+			const customer_group = group_by_tipo[frm.doc.tipo_de_factura] || "Clientes";
+
+			return {
+				"query": "rades.queries.customer_query",
+				"filters": {
+					"customer_group": customer_group,
+				},
+			};
+		});
+
+		frm.set_query("item_code", "items", () => {
+			if (["Clientes Seguros", "Meds", "Servimerd"].includes(frm.doc.tipo_de_factura)) {
+				return {
+					"query": "rades.queries.item_by_ars",
+					"filters": {
+						"ars": frm.doc.ars,
+					},
+				};
+			}
+
+			let item_filter;
+			if (frm.doc.tipo_de_factura === "Proveedores") {
+				item_filter = "Consultas";
+			} else if (frm.doc.tipo_de_factura === "Alquiler") {
+				item_filter = "ALQUILER";
+			} else {
+				item_filter = ["not in", ["Consultas", "ALQUILER"]];
+			}
+
+			return {
+				"filters": {
+					"item_name": item_filter,
+				},
+			};
+		});
+	},
 	"add_custom_button": (frm) => {
-		if(frm.doc.docstatus ==1){
-			frm.add_custom_button(__("Actualizar informacion personal"), event =>{
+		if (frm.doc.docstatus == 1) {
+			frm.add_custom_button(__("Actualizar informacion personal"), () => {
 				frappe.call(
 					"rades.sales_invoice.update_personal_info",
-					{"self":cur_frm.doc}
-				).done(response=>{
+					{"self": frm.doc}
+				).done(() => {
 					frappe.show_alert("Informacion Personal Actualizada", 10);
-					cur_frm.reload_doc();
-				})
-			})
+					frm.reload_doc();
+				});
+			});
 		}
 	},
 	"onload_post_render": (frm) => {
@@ -58,51 +101,15 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 
 		frm.is_new() && frm.trigger("customer");
-
-		frappe.run_serially([
-			() => frappe.timeout(2.5),
-			() => {
-			frm.set_query("customer", () => {
-				let condition = ["in", "Clientes"]
-
-				if (frm.doc.tipo_de_factura == "Proveedores") {
-					condition = ["in", "Proveedores"]
-				} else if (frm.doc.tipo_de_factura == "Alquiler") {
-					condition = ["in", "Alquiler"]
-				}
-
-				return {
-					"query": "erpnext.controllers.queries.customer_query",
-					"filters": {
-						"customer_group": condition
-					}
-				};
-			});
-
-
-			frm.set_query("item_code", "items", () => {
-				if (["Clientes Seguros", "Meds", "Servimerd"].includes(frm.doc.tipo_de_factura)) {
-					return {
-						"query": "rades.queries.item_by_ars",
-						"filters": {
-							"ars": frm.doc.ars
-						}
-					};
-				} else {
-					let item_group = frm.doc.tipo_de_factura == "Proveedores" ? "Consultas":
-						frm.doc.tipo_de_factura == "Alquiler" ? "ALQUILER":
-							["not in", "Consultas, ALQUILER"];
-
-					return {
-						"filters": {
-							"item_name": item_group
-						}
-					};
-				}
-			});
-		}]);
-
-		frm.is_new() && !frm.doc.is_return &&frm.trigger("show_prompt");
+		frm.is_new() && !frm.doc.is_return && frm.trigger("show_prompt");
+		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
+	},
+	"tipo_de_factura": (frm) => {
+		// The customer query depends on tipo_de_factura, so any previously
+		// picked customer may no longer be valid for the new group.
+		if (frm.doc.customer) {
+			frm.set_value("customer", null);
+		}
 		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
 	},
 	"before_submit": (frm) => {
@@ -152,16 +159,12 @@ frappe.ui.form.on("Sales Invoice", {
     	frm.set_value("selling_price_list", price_list);
     },
 
-	"referido": (frm) => {
-		if (frm.doc.referido && frm.doc.items){
-		}
-	},
 	"customer": (frm) => {	frappe.run_serially([
 		() => frappe.timeout(2.5),
 		() => {
 
-			frm.set_df_property("cobertura", "read_only", frm.doc.tipo_de_factura == "Clientes Seguros" ? 0 : 1 , frm.docname, "items");
-			frm.set_df_property("rate", "read_only", frm.doc.tipo_de_factura == "Alquiler" ? 0 : 1 , frm.docname, "items");
+			frm.set_df_property("items", "read_only", frm.doc.tipo_de_factura == "Clientes Seguros" ? 0 : 1 , frm.docname, "cobertura");
+			frm.set_df_property("items", "read_only", frm.doc.tipo_de_factura == "Alquiler" ? 0 : 1 , frm.docname, "rate");
 			refresh_field("items");
 
 			if (frm.doc.tipo_de_factura == "Clientes Seguros") {
@@ -207,7 +210,7 @@ frappe.ui.form.on("Sales Invoice", {
 				$.each(fields_dict, (field, value) => frm.set_value(field, value));
 
 				frm.toggle_display("ars", false);
-				frm.set_df_property("cobertura", "read_only", 1, frm.docname, "items");
+				frm.set_df_property("items", "read_only", 1, frm.docname, "cobertura");
 				refresh_field("items");
 
 			}
@@ -278,17 +281,59 @@ frappe.ui.form.on("Sales Invoice", {
 			});
 		}
 	]); },
+	"item_table_update": (frm, cdt, cdn) => {
+		const row = frappe.get_doc(cdt, cdn);
+		if (!row || !row.item_code) {
+			return;
+		}
+
+		const apply_pct = aplicar_porciento(row);
+		const cobertura = flt(row.cobertura) / 100.0;
+		const thursday_clearance = has_clearance(row, frm) && es_jueves(frm);
+
+		row.authorized_amount = apply_pct ? row.rate * cobertura : 0;
+		row.claimed_amount    = apply_pct ? row.rate : 0;
+		row.difference_amount = thursday_clearance ? 0 : row.rate - row.authorized_amount;
+		row.copago            = thursday_clearance ? row.rate - row.authorized_amount : 0;
+
+		refresh_field("items");
+		frm.trigger("refresh_outside_amounts");
+	},
+	"refresh_outside_amounts": (frm) => {
+		let total_authorized_amount = 0.0;
+		let total_claimed_amount    = 0.0;
+		let total_difference_amount = 0.0;
+		let total_copago_amount     = 0.0;
+
+		$.map(frm.doc.items || [], (row) => {
+			total_authorized_amount += flt(row.authorized_amount);
+			total_claimed_amount    += flt(row.claimed_amount);
+			total_difference_amount += flt(row.difference_amount);
+			total_copago_amount     += flt(row.copago);
+		});
+
+		frm.set_value("monto_reclamado", total_claimed_amount);
+		frm.set_value("monto_autorizado", total_authorized_amount);
+		frm.set_value("diferencia", total_difference_amount);
+		frm.set_value("copago", total_copago_amount);
+
+		rades.sales_invoice.update_payment_table(frm, {
+			"total_authorized_amount": total_authorized_amount,
+			"total_copago": total_copago_amount,
+			"total_difference_amount": total_difference_amount,
+		});
+
+		refresh_field("items");
+	},
 	"cobertura": (frm) => {
 		$.map(frm.doc.items, (row) => {
 			frappe.model.set_value(row.doctype, row.name, "cobertura", frm.doc.cobertura);
 		});
 	},
 	"hide_dashboard": (frm) => {
-		frm.dashboard.wrapper.parent().addClass("hide")
-			.parent().find(".section-head").addClass("collapsed")
-			.find(".octicon.collapse-indicator.octicon-chevron-up")
-			.removeClass()
-			.addClass("octicon collapse-indicator octicon-chevron-down");
+		if (frm.dashboard && frm.dashboard.parent) {
+			$(frm.dashboard.parent).addClass("hide");
+		}
 	}
 });
 
