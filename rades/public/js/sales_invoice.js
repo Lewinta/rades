@@ -180,20 +180,31 @@ frappe.ui.form.on("Sales Invoice", {
 				frappe.db.get_value("Customer", frm.doc.customer, fieldlist, (data) => {
 					$.each(data, (key, value) => frm.set_value(key, value));
 					frm.toggle_display("ars", true);
-					!frm.doc.is_return && frm.clear_table("payments");
+					if (!frm.doc.is_return) {
+						frm.clear_table("payments");
+					}
+
+					const mop_added = new Set();
 
 					if ( ! (frm.doc.ars && frm.doc.nss)) {
 						$.map(fieldlist, (field) => frm.set_value(field, undefined));
 						frm.set_value("selling_price_list", "Venta estándar");
 						frm.set_value("cobertura", 0);
-						frm.add_child("payments", {
-							"mode_of_payment": "Servimerd"
-						});
+
+						if (!mop_added.has("Servimerd")) {
+							frm.add_child("payments", {
+								"mode_of_payment": "Servimerd"
+							});
+							mop_added.add("Servimerd");
+						}
 					} else {
 						$.map(["Seguro", "Servimerd"], (mode) => {
-							frm.add_child("payments", {
-								"mode_of_payment": mode
-							});
+							if (!mop_added.has(mode)) {
+								frm.add_child("payments", {
+									"mode_of_payment": mode
+								});
+								mop_added.add(mode);
+							}
 						});
 
 						frm.set_value("cobertura", frappe.boot.conf.autorizado_por_seguros);
