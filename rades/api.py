@@ -37,8 +37,9 @@ def update_sales_invoice(doc, selections, args):
 		"item_name": "Consultas",
 		"description": "Consultas",
 		"item_group": "Servicios",
-		"stock_uom": "Unidad(es)",
-		"uom": "Unidad(es)",
+		# stock_uom/uom intentionally omitted: set_missing_values() pulls them
+		# from the Item record, which keeps this portable across sites where
+		# the UOM name differs (csrd uses "Unidad" after the Unidad(es) merge).
 		"paid_sales_invoices": selections,
 		"print_qty": len(selections.split(",")),
 		"qty": -1 if sinv.get("is_return") else 1,
@@ -50,6 +51,24 @@ def update_sales_invoice(doc, selections, args):
 	})
 
 	sinv.set_missing_values()
+
+	# When the cashier loads supplier invoices via "Cargar Facturas" the rate
+	# is the accumulated total from the source invoices. set_missing_values
+	# pulls price_list_rate from the Item Price for "Consultas", so any
+	# difference between that catalog price and the accumulated total shows
+	# up as a phantom discount. Pin the price-list rate to the loaded rate
+	# (in both transaction and company currencies) so no discount is booked.
+	conv = sinv.conversion_rate or 1
+	plc_conv = sinv.plc_conversion_rate or conv
+	for item in sinv.items:
+		if item.item_code != "Consultas":
+			continue
+		item.price_list_rate = item.rate
+		item.base_price_list_rate = (item.rate or 0) * plc_conv
+		item.base_rate = (item.rate or 0) * conv
+		item.discount_percentage = 0
+		item.discount_amount = 0
+		item.base_discount_amount = 0
 
 	return sinv.as_dict()
 

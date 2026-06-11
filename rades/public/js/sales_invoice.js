@@ -1,5 +1,9 @@
 frappe.provide("rades.sales_invoice");
 
+function update_selling_price_list_from_ars(frm, ars) {
+	return frm.set_value("selling_price_list", ars ? ars : "Venta estándar");
+}
+
 frappe.ui.form.on("Sales Invoice", {
 	"setup": (frm) => {
 		$.each({"ars": "ars", "nss": "nss"}, (key, value) => {
@@ -17,27 +21,6 @@ frappe.ui.form.on("Sales Invoice", {
 		let show = frappe.user.has_role("Accounts Manager");
 		frm.toggle_enable("ncf", show);
 		
-	},
-	"validate": (frm) => {
-		const no_verif = ["Clientes Privados", "Clientes Seguros"]
-
-		let opts = {
-			"method": "dgii.api.validate_ncf_limit"
-		};
-
-		opts.args = {
-			"serie": frm.doc.naming_series
-		};
-
-		frappe.call(opts).done((response) =>{
-			let doc = response.message;
-
-			// if (!doc) {
-			// 	frappe.msgprint("No hay mas comprobantes disponibles para esta serie");
-			// 	validated = false;
-			// }
-		}).fail(() => frappe.msgprint("¡Ha ocurrido un error!"));
-
 	},
 	set_queries: (frm) => {
 		frm.set_query("customer", () => {
@@ -154,10 +137,8 @@ frappe.ui.form.on("Sales Invoice", {
             });
         }
     },
-    "ars": (frm) =>{
-    	let price_list = frm.doc.ars ? frm.doc.ars : "Venta estándar";
-
-    	frm.set_value("selling_price_list", price_list);
+    "ars": (frm) => {
+    	update_selling_price_list_from_ars(frm, frm.doc.ars);
     },
 
 	"customer": (frm) => {	frappe.run_serially([
@@ -165,50 +146,64 @@ frappe.ui.form.on("Sales Invoice", {
 		() => {
 
 			frm.set_df_property("items", "read_only", frm.doc.tipo_de_factura == "Clientes Seguros" ? 0 : 1 , frm.docname, "cobertura");
-			frm.set_df_property("items", "read_only", frm.doc.tipo_de_factura == "Alquiler" ? 0 : 1 , frm.docname, "rate");
+			frm.set_df_property("items", "read_only", ["Alquiler", "Proveedores"].includes(frm.doc.tipo_de_factura) ? 0 : 1 , frm.docname, "rate");
 			refresh_field("items");
 
 			if (frm.doc.tipo_de_factura == "Clientes Seguros") {
 				frappe.db.get_value("Customer", frm.doc.customer, ["nss", "ars"], (data) => {
-					$.each(data, (key, value) => frm.set_value(key, value));
-					frm.toggle_display("ars", true);
+					frappe.run_serially([
+						() => frm.set_value("nss", data.nss),
+						() => frm.set_value("ars", data.ars),
+						() => update_selling_price_list_from_ars(frm, data.ars),
+						() => frm.toggle_display("ars", true),
+					]);
 				});
 			}
 			if (frm.doc.tipo_de_factura == "Servimerd") {
 				let fieldlist = ["nss", "ars"];
 
 				frappe.db.get_value("Customer", frm.doc.customer, fieldlist, (data) => {
-					$.each(data, (key, value) => frm.set_value(key, value));
-					frm.toggle_display("ars", true);
-					if (!frm.doc.is_return) {
-						frm.clear_table("payments");
-					}
-
 					const mop_added = new Set();
 
-					if ( ! (frm.doc.ars && frm.doc.nss)) {
-						$.map(fieldlist, (field) => frm.set_value(field, undefined));
-						frm.set_value("selling_price_list", "Venta estándar");
-						frm.set_value("cobertura", 0);
-
-						if (!mop_added.has("Servimerd")) {
-							frm.add_child("payments", {
-								"mode_of_payment": "Servimerd"
-							});
-							mop_added.add("Servimerd");
-						}
-					} else {
-						$.map(["Seguro", "Servimerd"], (mode) => {
-							if (!mop_added.has(mode)) {
-								frm.add_child("payments", {
-									"mode_of_payment": mode
-								});
-								mop_added.add(mode);
+					frappe.run_serially([
+						() => frm.set_value("nss", data.nss),
+						() => frm.set_value("ars", data.ars),
+						() => update_selling_price_list_from_ars(frm, data.ars),
+						() => frm.toggle_display("ars", true),
+						() => !frm.doc.is_return && frm.clear_table("payments"),
+						() => {
+							if (!(data.ars && data.nss)) {
+								return frappe.run_serially([
+									() => frm.set_value("nss", undefined),
+									() => frm.set_value("ars", undefined),
+									() => update_selling_price_list_from_ars(frm, null),
+									() => frm.set_value("cobertura", 0),
+									() => {
+										if (!mop_added.has("Servimerd")) {
+											frm.add_child("payments", {
+												"mode_of_payment": "Servimerd"
+											});
+											mop_added.add("Servimerd");
+										}
+									},
+								]);
 							}
-						});
 
-						frm.set_value("cobertura", frappe.boot.conf.autorizado_por_seguros);
-					}
+							return frappe.run_serially([
+								() => frm.set_value("cobertura", frappe.boot.conf.autorizado_por_seguros),
+								() => {
+									$.map(["Seguro", "Servimerd"], (mode) => {
+										if (!mop_added.has(mode)) {
+											frm.add_child("payments", {
+												"mode_of_payment": mode
+											});
+											mop_added.add(mode);
+										}
+									});
+								},
+							]);
+						},
+					]);
 				});
 			}
 
@@ -303,10 +298,22 @@ frappe.ui.form.on("Sales Invoice", {
 		const cobertura = flt(row.cobertura) / 100.0;
 		const thursday_clearance = has_clearance(row, frm) && es_jueves(frm);
 
-		row.authorized_amount = apply_pct ? row.rate * cobertura : 0;
-		row.claimed_amount    = apply_pct ? row.rate : 0;
-		row.difference_amount = thursday_clearance ? 0 : row.rate - row.authorized_amount;
-		row.copago            = thursday_clearance ? row.rate - row.authorized_amount : 0;
+		// En facturas de seguros los campos se calculan desde el precio base
+		// (price_list_rate); el rate ajustado por copago/descuento generaria
+		// una dependencia circular. En los demas tipos se conserva el rate.
+		const base = is_insurance_invoice(frm) ? get_base_rate(row) : flt(row.rate);
+
+		row.authorized_amount = apply_pct ? base * cobertura : 0;
+		row.claimed_amount    = apply_pct ? base : 0;
+		row.difference_amount = thursday_clearance ? 0 : base - row.authorized_amount;
+		// Solo auto-calcular copago en ofertas de jueves; si no, conservar el valor manual.
+		if (thursday_clearance) {
+			row.copago = base - row.authorized_amount;
+		}
+
+		// El copago suma/resta a la diferencia segun su signo y se traslada al
+		// rate (Monto) a traves del descuento nativo de ERPNext.
+		apply_copago_discount(frm, cdt, cdn);
 
 		refresh_field("items");
 		frm.trigger("refresh_outside_amounts");
@@ -378,6 +385,11 @@ frappe.ui.form.on("Sales Invoice Item", {
 		frm.trigger("refresh_outside_amounts");
 	},
 	"discount_percentage": (frm, cdt, cdn) => {
+		// Cambio real del % (usuario o flujo de referidos): se actualiza el
+		// porcentaje guardado para combinarlo con el copago en el descuento.
+		const row = frappe.get_doc(cdt, cdn);
+		row.__referral_pct = flt(row.discount_percentage);
+
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
 			() => frm.events.item_table_update(frm, cdt, cdn),
@@ -403,23 +415,20 @@ frappe.ui.form.on("Sales Invoice Item", {
 		]);
 	},
 	"items_add": (frm, cdt, cdn) => {
-		// frappe.model.set_value(cdt, cdn, "cobertura", frm.doc.cobertura);
-		row = frappe.model.get_doc(cdt,cdn);
+		const row = frappe.model.get_doc(cdt, cdn);
 		row.cobertura = frm.doc.cobertura;
-		row.rate = row.cobertura * row.rate;
-
-		// amount * = frappe.model.set_value(cdt, cdn, "rate", frm.doc.cobertura);
-		// console.log(amount)
 	},
 	"copago": (frm, cdt, cdn) => {
-		row = frappe.model.get_doc(cdt,cdn);
+		const row = frappe.get_doc(cdt, cdn);
+		const base = is_insurance_invoice(frm) ? get_base_rate(row) : flt(row.rate);
+		const diff = flt(row.difference_amount) || base - flt(row.authorized_amount);
 
-		if(row.copago > row.diferencia){
+		// Copago positivo: descuenta de la diferencia, no puede excederla.
+		// Copago negativo: aumenta la diferencia (el rate sube), se permite.
+		if (flt(row.copago) > 0 && flt(row.copago) > diff) {
 			frappe.throw("El copago no puede ser mayor a la diferencia");
-			row.copago = 0.00;
+			return;
 		}
-
-		row.diferencia -= row.copago;
 
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
@@ -531,6 +540,82 @@ function aplicar_copago(row, frm){
 		return true
 	else
 		return false
+}
+
+function is_insurance_invoice(frm) {
+	return ["Clientes Seguros", "Servimerd", "Meds"].includes(frm.doc.tipo_de_factura);
+}
+
+// Precio base de la linea: el precio de lista, nunca el rate ya ajustado por
+// descuentos/copago, para evitar dependencia circular en los calculos de seguro.
+function get_base_rate(row) {
+	return flt(row.price_list_rate) || flt(row.rate_with_margin) || flt(row.rate);
+}
+
+// ERPNext ignora discount_amount si la linea no tiene price_list_rate
+// (ver apply_discount_on_item en erpnext/public/js/controllers/transaction.js),
+// asi que se siembra desde el rate actual cuando falta.
+function ensure_price_list_rate(row) {
+	const base = get_base_rate(row);
+
+	if (!flt(row.price_list_rate) && base) {
+		row.price_list_rate = base;
+	}
+
+	return base;
+}
+
+function apply_copago_discount(frm, cdt, cdn) {
+	const row = frappe.get_doc(cdt, cdn);
+	if (!row || !row.item_code) {
+		return;
+	}
+
+	if (!is_insurance_invoice(frm)) {
+		console.debug("[rades] copago: sin ajuste de rate para tipo_de_factura =", frm.doc.tipo_de_factura);
+		return;
+	}
+
+	const base = ensure_price_list_rate(row);
+	if (!base) {
+		console.debug("[rades] copago: sin precio base en la linea", row.item_code);
+		return;
+	}
+
+	// El % de descuento por referido se conserva aparte, porque ERPNext
+	// recalcula discount_percentage a partir de discount_amount y se perderia.
+	if (row.__referral_pct === undefined) {
+		row.__referral_pct = flt(row.discount_percentage);
+	}
+
+	const referral_discount = (base * flt(row.__referral_pct)) / 100.0;
+	// target_rate = base - referral - copago (copago con signo)
+	const total_discount = referral_discount + flt(row.copago);
+
+	console.debug("[rades] copago discount", {
+		"item": row.item_code,
+		"base": base,
+		"copago": flt(row.copago),
+		"total_discount": total_discount,
+	});
+
+	// Se usa frappe.model.set_value para que corran los triggers nativos de
+	// ERPNext (apply_discount_on_item -> apply_pricing_rule_on_item ->
+	// calculate_taxes_and_totals) y el rate (Monto) quede consistente.
+	if (total_discount >= 0) {
+		row.margin_type = "";
+		row.margin_rate_or_amount = 0;
+		return frappe.model.set_value(cdt, cdn, "discount_amount", total_discount);
+	}
+
+	// Copago negativo: el rate sube por encima del precio de lista.
+	// ERPNext no acepta descuentos negativos, se aplica como margen.
+	row.discount_percentage = 0;
+	row.discount_amount = 0;
+	return frappe.run_serially([
+		() => frappe.model.set_value(cdt, cdn, "margin_type", "Amount"),
+		() => frappe.model.set_value(cdt, cdn, "margin_rate_or_amount", -total_discount),
+	]);
 }
 
 function has_clearance(row, frm){

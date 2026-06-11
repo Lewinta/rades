@@ -63,6 +63,12 @@ fixtures = [
 			"module": "Rades",
 		}
 	},
+	{
+		"doctype": "Custom DocPerm",
+		"filters": {
+			"docstatus": 0
+		}
+	}
 
 ]
 

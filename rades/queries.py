@@ -15,13 +15,19 @@ def customer_query(doctype, txt, searchfield, start, page_len, filters):
 	like = "%{}%".format("%".join(txt.split())) if txt else "%"
 	customer_group = _unwrap_in_filter(filters.get("customer_group")) or "Clientes"
 
+	# Allow searching the customer by any of these fields (whichever exist on this
+	# site): docname, customer name, RNC/Cedula (tax_id), NSS and phone (telefono).
+	meta = frappe.get_meta("Customer")
+	search_fields = ["name", "customer_name"]
+	for fieldname in ("tax_id", "nss", "telefono"):
+		if meta.has_field(fieldname):
+			search_fields.append(fieldname)
+
 	return frappe.get_list(
 		"Customer",
-		filters={
-			"name": ["like", like],
-			"customer_group": customer_group,
-		},
-		fields=["name", "customer_group"],
+		filters={"customer_group": customer_group},
+		or_filters=[[fieldname, "like", like] for fieldname in search_fields],
+		fields=["name", "customer_name","tax_id", "nss", "telefono"],
 		order_by="name",
 		distinct=True,
 		start=start,

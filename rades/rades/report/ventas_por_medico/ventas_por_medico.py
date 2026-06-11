@@ -14,7 +14,7 @@ def get_columns():
 		"Factura:Link/Sales Invoice:90",
 		"Fecha:Date:90",
 		"Paciente:Link/Customer:200",
-		"Medico:Link/Customer:180",
+		"Medico:Link/Medico:180",
 		"Servicio:Link/Item Group:90",
 		"Grupo:Data:90",
 		"Total:Currency:90",

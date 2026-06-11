@@ -1,0 +1,67 @@
+{
+ "add_total_row": 1,
+ "add_translate_data": 0,
+ "columns": [],
+ "creation": "2026-06-03 13:45:36.999419",
+ "disabled": 0,
+ "docstatus": 0,
+ "doctype": "Report",
+ "filters": [
+  {
+   "default": "Today",
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Date",
+   "mandatory": 1,
+   "wildcard_filter": 0
+  },
+  {
+   "default": "Today",
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To Date",
+   "mandatory": 1,
+   "wildcard_filter": 0
+  },
+  {
+   "default": "",
+   "fieldname": "tipo_de_factura",
+   "fieldtype": "Select",
+   "label": "Tipo de Factura",
+   "mandatory": 0,
+   "options": "\nClientes Privados\nClientes Seguros\nAlquiler\nProveedores",
+   "wildcard_filter": 0
+  }
+ ],
+ "idx": 0,
+ "is_standard": "Yes",
+ "letter_head": null,
+ "modified": "2026-06-03 14:32:04.332385",
+ "modified_by": "Administrator",
+ "module": "Rades",
+ "name": "Registro de Ventas",
+ "owner": "Administrator",
+ "prepared_report": 0,
+ "query": "",
+ "ref_doctype": "Sales Invoice",
+ "report_name": "Registro de Ventas",
+ "report_type": "Script Report",
+ "roles": [
+  {
+   "role": "Contador"
+  },
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Accounts User"
+  },
+  {
+   "role": "Vendedor"
+  },
+  {
+   "role": "All"
+  }
+ ],
+ "timeout": 0
+}
