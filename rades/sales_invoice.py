@@ -1,8 +1,17 @@
 import frappe
 import json
+from frappe import _
 from frappe.model.naming import make_autoname
 
 DEFAULT_SELLING_PRICE_LIST = "Venta estándar"
+
+# Estados devueltos por Alanube/DGII cuando el e-CF quedó registrado.
+DGII_REGISTERED_LEGAL_STATUSES = frozenset({
+	"ACCEPTED",
+	"ACCEPTED_WITH_OBSERVATIONS",
+	"ACEPTADO",
+	"ACEPTADO CON OBSERVACIONES",
+})
 
 
 def expected_selling_price_list_for_seguro(ars):
@@ -70,6 +79,46 @@ def _get_mismatched_draft_seguro_invoices():
 		{"default": DEFAULT_SELLING_PRICE_LIST},
 		as_dict=True,
 	)
+
+def before_validate(doc, event=None):
+	validate_dgii_registered_invoice_cancel(doc)
+
+
+def validate_dgii_registered_invoice_cancel(doc):
+	"""Impide cancelar facturas e-CF ya enviadas a Alanube y aceptadas por la DGII."""
+	if not _is_cancelling(doc):
+		return
+
+	if not _is_dgii_registered_encf(doc):
+		return
+
+	encf = doc.ncf or doc.get("encf")
+	frappe.throw(
+		_(
+			"No se puede cancelar la factura {0} porque el e-CF {1} ya fue enviado "
+			"a Alanube y está registrado en la DGII (estado: {2}). "
+			"Debe emitir una Nota de Crédito electrónica."
+		).format(doc.name, encf, doc.legal_status),
+		title=_("Factura fiscal registrada en DGII"),
+	)
+
+
+def _is_cancelling(doc):
+	prev = doc.get_doc_before_save()
+	return bool(prev and prev.docstatus == 1 and doc.docstatus == 2)
+
+
+def _is_dgii_registered_encf(doc):
+	encf = (doc.ncf or doc.get("encf") or "").strip().upper()
+	if not encf.startswith("E"):
+		return False
+
+	if not doc.get("dgii_response_id"):
+		return False
+
+	legal_status = (doc.get("legal_status") or "").strip().upper()
+	return legal_status in DGII_REGISTERED_LEGAL_STATUSES
+
 
 def autoname(self, event):
 	self.name = make_autoname("FACT-.#####")

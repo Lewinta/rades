@@ -305,10 +305,15 @@ frappe.ui.form.on("Sales Invoice", {
 
 		row.authorized_amount = apply_pct ? base * cobertura : 0;
 		row.claimed_amount    = apply_pct ? base : 0;
-		row.difference_amount = thursday_clearance ? 0 : base - row.authorized_amount;
-		// Solo auto-calcular copago en ofertas de jueves; si no, conservar el valor manual.
+
+		const gross_difference = base - row.authorized_amount;
 		if (thursday_clearance) {
-			row.copago = base - row.authorized_amount;
+			// Jueves: toda la brecha va al copago; la diferencia netea a cero.
+			row.copago = gross_difference;
+			row.difference_amount = 0;
+		} else {
+			// copago + difference_amount = gross_difference (brecha total del paciente).
+			row.difference_amount = gross_difference - flt(row.copago);
 		}
 
 		// El copago suma/resta a la diferencia segun su signo y se traslada al
@@ -421,11 +426,11 @@ frappe.ui.form.on("Sales Invoice Item", {
 	"copago": (frm, cdt, cdn) => {
 		const row = frappe.get_doc(cdt, cdn);
 		const base = is_insurance_invoice(frm) ? get_base_rate(row) : flt(row.rate);
-		const diff = flt(row.difference_amount) || base - flt(row.authorized_amount);
+		const gross_difference = base - flt(row.authorized_amount);
 
-		// Copago positivo: descuenta de la diferencia, no puede excederla.
-		// Copago negativo: aumenta la diferencia (el rate sube), se permite.
-		if (flt(row.copago) > 0 && flt(row.copago) > diff) {
+		// Copago positivo: descuenta de la brecha total, no puede excederla.
+		// Copago negativo: aumenta la diferencia neta (el rate sube), se permite.
+		if (flt(row.copago) > 0 && flt(row.copago) > gross_difference) {
 			frappe.throw("El copago no puede ser mayor a la diferencia");
 			return;
 		}
