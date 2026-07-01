@@ -1,27 +1,44 @@
 frappe.provide("rades.sinv");
 
 $.extend(frappe.listview_settings["Sales Invoice"], {
-	"post_render": function(list) {
-		// Ocultar primero: el codigo de customer_group de abajo puede lanzar si
-		// customer_group no es un standard filter, y no queremos que eso impida
-		// ocultar "Nombre del Tercero".
+	// OJO: el list view de Frappe NO invoca "post_render" (solo existe en form/treeview).
+	// El hook correcto que recibe el listview es "onload".
+	"onload": function(list) {
 		rades.sinv.hide_customer_name_standard_filter(list);
-
-		var customer_group = list.page.fields_dict.customer_group;
-		if (customer_group) {
-			var options = customer_group.$input.children();
-
-			if (options.length > 3) {
-				customer_group.$input.empty();
-				customer_group.$input.add_options(["Clientes", "Proveedores", "Alquiler"]);
-			}
-		}
-
+		rades.sinv.limit_customer_group_options(list);
 		rades.sinv.set_customer_query(list);
 	}
 });
 
 $.extend(rades.sinv, {
+	// customer_name (label "Nombre del Tercero") es el title_field de Sales Invoice,
+	// y el list view SIEMPRE muestra el title_field como standard filter, sin importar
+	// in_standard_filter (base_list.js: df.fieldname === title_field || df.in_standard_filter).
+	// No queremos cambiar el title_field (cambiaria el titulo mostrado del documento),
+	// asi que ocultamos su control de filtro con CSS: es independiente del momento en que
+	// Frappe (re)renderiza el control.
+	"hide_customer_name_standard_filter": function(list) {
+		var style_id = "rades-hide-sinv-customer-name-filter";
+		if (document.getElementById(style_id)) return;
+
+		$(
+			"<style id='" + style_id + "'>" +
+			'.page-form .frappe-control[data-fieldname="customer_name"]{display:none !important;}' +
+			"</style>"
+		).appendTo("head");
+	},
+
+	"limit_customer_group_options": function(list) {
+		var cg = list.page.fields_dict.customer_group;
+		if (!cg || !cg.$input) return;
+
+		var options = cg.$input.children();
+		if (options.length > 3) {
+			cg.$input.empty();
+			cg.$input.add_options(["Clientes", "Proveedores", "Alquiler"]);
+		}
+	},
+
 	"set_customer_query": function(list) {
 		var customer_field = list.page.fields_dict.customer;
 		if (!customer_field) return;
@@ -37,22 +54,6 @@ $.extend(rades.sinv, {
 					"customer_group": customer_group || "Clientes"
 				}
 			}
-		}
-	},
-	// customer_name (label "Nombre del Tercero") aparece como standard filter
-	// porque es el title_field de Sales Invoice (el list view siempre muestra el
-	// title_field como filtro, sin importar in_standard_filter). Como no queremos
-	// cambiar el title_field (afectaria el titulo mostrado del documento),
-	// ocultamos su control del area de filtros. Lo hacemos por DOM (data-fieldname)
-	// para no depender de fields_dict.
-	"hide_customer_name_standard_filter": function(list) {
-		list.page.page_form
-			.find('.frappe-control[data-fieldname="customer_name"]')
-			.hide();
-
-		var field = list.page.fields_dict.customer_name;
-		if (field && field.$wrapper) {
-			field.$wrapper.hide();
 		}
 	}
 });
