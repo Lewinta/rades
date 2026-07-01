@@ -347,9 +347,34 @@ frappe.ui.form.on("Sales Invoice", {
 
 				setup_cargar_facturas_date_filters(d);
 
-				// Ensanchar el dialogo al 70% del viewport para que los filtros
-				// (setters) queden en una sola linea horizontal.
-				d.dialog.$wrapper.find(".modal-dialog").css("max-width", "70vw");
+				// Ensanchar el dialogo para que los filtros (setters) quepan
+				// en una sola linea horizontal.
+				d.dialog.$wrapper.find(".modal-dialog").css("max-width", "80vw");
+
+				// Frappe reparte los setters en 3 columnas (index % 3), por lo que
+				// el buscador y "Rango de Fechas" quedan apilados en la 1ra columna.
+				// Aplanamos la seccion: cada .form-column pasa a display:contents
+				// para que sus controles sean items directos del flex de .section-body
+				// y todos los filtros queden alineados en una sola fila.
+				const $setters = d.dialog.$wrapper
+					.find('[data-fieldname="posting_date_range"]')
+					.closest(".form-section");
+				$setters.find(".section-body").css({
+					display: "flex",
+					"flex-wrap": "nowrap",
+					"align-items": "flex-end",
+					gap: "12px",
+				});
+				$setters.find(".form-column").css("display", "contents");
+				$setters.find(".frappe-control").css({
+					flex: "1 1 0",
+					"min-width": "0",
+					margin: "0",
+				});
+				// El rango de fechas necesita mas ancho (dos inputs de fecha).
+				$setters
+					.find('[data-fieldname="posting_date_range"]')
+					.css("flex", "1.8 1 0");
 
 				d.get_results();
 
