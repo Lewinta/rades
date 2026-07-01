@@ -33,7 +33,10 @@ def find_dirty(invoice_names=None):
 def run(invoice_names=None, dry_run=True):
 	"""Redondea a 2 decimales los montos aux de items y header.
 
-	Solo campos auxiliares via db.set_value(update_modified=False): NO toca
+	La diferencia se RECALCULA como claimed - authorized - copago (misma
+	identidad que el JS), para preservar claimed = autorizado + diferencia +
+	copago. El header se recompone sumando las lineas ya redondeadas. Solo
+	campos auxiliares via db.set_value(update_modified=False): NO toca
 	rate/amount/grand_total/GL y NO re-somete. Idempotente.
 	"""
 	names = invoice_names or BLOCK_INVOICES
@@ -41,16 +44,36 @@ def run(invoice_names=None, dry_run=True):
 	for name in names:
 		items = frappe.get_all(
 			"Sales Invoice Item", filters={"parent": name},
-			fields=["name"] + ITEM_FIELDS)
+			fields=["name", "claimed_amount", "authorized_amount", "difference_amount", "copago"])
+		tot = {"monto_reclamado": 0.0, "monto_autorizado": 0.0, "diferencia": 0.0}
 		for it in items:
-			updates = {f: flt(it.get(f), 2) for f in ITEM_FIELDS if _dirty(it.get(f))}
+			claimed_r = flt(it.get("claimed_amount"), 2)
+			authorized_r = flt(it.get("authorized_amount"), 2)
+			copago_r = flt(it.get("copago"), 2)
+			difference_r = flt(claimed_r - authorized_r - copago_r, 2)
+
+			tot["monto_reclamado"] += claimed_r
+			tot["monto_autorizado"] += authorized_r
+			tot["diferencia"] += difference_r
+
+			updates = {}
+			if flt(it.get("claimed_amount")) != claimed_r:
+				updates["claimed_amount"] = claimed_r
+			if flt(it.get("authorized_amount")) != authorized_r:
+				updates["authorized_amount"] = authorized_r
+			if flt(it.get("difference_amount")) != difference_r:
+				updates["difference_amount"] = difference_r
 			if updates:
 				changed.append(("item", it.name, updates))
 				if not dry_run:
 					frappe.db.set_value("Sales Invoice Item", it.name, updates, update_modified=False)
 
 		hdr = frappe.db.get_value("Sales Invoice", name, HEADER_FIELDS, as_dict=True) or {}
-		hupd = {f: flt(hdr.get(f), 2) for f in HEADER_FIELDS if _dirty(hdr.get(f))}
+		hupd = {}
+		for f in HEADER_FIELDS:
+			newv = flt(tot[f], 2)
+			if flt(hdr.get(f)) != newv:
+				hupd[f] = newv
 		if hupd:
 			changed.append(("header", name, hupd))
 			if not dry_run:
