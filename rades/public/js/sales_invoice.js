@@ -351,30 +351,38 @@ frappe.ui.form.on("Sales Invoice", {
 				// en una sola linea horizontal.
 				d.dialog.$wrapper.find(".modal-dialog").css("max-width", "80vw");
 
-				// Frappe reparte los setters en 3 columnas (index % 3), por lo que
-				// el buscador y "Rango de Fechas" quedan apilados en la 1ra columna.
-				// Aplanamos la seccion: cada .form-column pasa a display:contents
-				// para que sus controles sean items directos del flex de .section-body
-				// y todos los filtros queden alineados en una sola fila.
-				const $setters = d.dialog.$wrapper
-					.find('[data-fieldname="posting_date_range"]')
-					.closest(".form-section");
-				$setters.find(".section-body").css({
+				// Frappe reparte los setters en 3 columnas (index % 3) y cada
+				// .form-column envuelve sus controles en un <form>, por lo que el
+				// buscador y "Rango de Fechas" quedan apilados. En vez de pelear con
+				// ese anidamiento, movemos los 4 controles a una fila flex propia.
+				const $wrapper = d.dialog.$wrapper;
+				const $filtros = $(
+					'<div class="cargar-facturas-filtros"></div>'
+				).css({
 					display: "flex",
 					"flex-wrap": "nowrap",
 					"align-items": "flex-end",
 					gap: "12px",
+					"margin-bottom": "10px",
 				});
-				$setters.find(".form-column").css("display", "contents");
-				$setters.find(".frappe-control").css({
-					flex: "1 1 0",
-					"min-width": "0",
-					margin: "0",
+				const filtros_orden = [
+					"search_term",
+					"ars",
+					"tipo_de_factura",
+					"posting_date_range",
+				];
+				filtros_orden.forEach((fieldname) => {
+					const $control = $wrapper.find(
+						`.frappe-control[data-fieldname="${fieldname}"]`
+					);
+					if (!$control.length) return;
+					// Rango de fechas necesita mas ancho (dos inputs de fecha).
+					const grow = fieldname === "posting_date_range" ? "1.8" : "1";
+					$control
+						.css({ flex: `${grow} 1 0`, "min-width": "0", margin: "0" })
+						.appendTo($filtros);
 				});
-				// El rango de fechas necesita mas ancho (dos inputs de fecha).
-				$setters
-					.find('[data-fieldname="posting_date_range"]')
-					.css("flex", "1.8 1 0");
+				$filtros.prependTo($wrapper.find(".modal-body"));
 
 				d.get_results();
 
