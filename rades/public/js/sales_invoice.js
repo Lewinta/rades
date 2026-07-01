@@ -412,17 +412,17 @@ frappe.ui.form.on("Sales Invoice", {
 		// una dependencia circular. En los demas tipos se conserva el rate.
 		const base = is_insurance_invoice(frm) ? get_base_rate(row) : flt(row.rate);
 
-		row.authorized_amount = apply_pct ? base * cobertura : 0;
-		row.claimed_amount    = apply_pct ? base : 0;
+		row.authorized_amount = flt(apply_pct ? base * cobertura : 0, 2);
+		row.claimed_amount    = flt(apply_pct ? base : 0, 2);
 
 		const gross_difference = base - row.authorized_amount;
 		if (thursday_clearance) {
 			// Jueves: toda la brecha va al copago; la diferencia netea a cero.
-			row.copago = gross_difference;
+			row.copago = flt(gross_difference, 2);
 			row.difference_amount = 0;
 		} else {
 			// copago + difference_amount = gross_difference (brecha total del paciente).
-			row.difference_amount = gross_difference - flt(row.copago);
+			row.difference_amount = flt(gross_difference - flt(row.copago), 2);
 		}
 
 		// El copago suma/resta a la diferencia segun su signo y se traslada al
@@ -445,10 +445,10 @@ frappe.ui.form.on("Sales Invoice", {
 			total_copago_amount     += flt(row.copago);
 		});
 
-		frm.set_value("monto_reclamado", total_claimed_amount);
-		frm.set_value("monto_autorizado", total_authorized_amount);
-		frm.set_value("diferencia", total_difference_amount);
-		frm.set_value("copago", total_copago_amount);
+		frm.set_value("monto_reclamado", flt(total_claimed_amount, 2));
+		frm.set_value("monto_autorizado", flt(total_authorized_amount, 2));
+		frm.set_value("diferencia", flt(total_difference_amount, 2));
+		frm.set_value("copago", flt(total_copago_amount, 2));
 
 		rades.sales_invoice.update_payment_table(frm, {
 			"total_authorized_amount": total_authorized_amount,
