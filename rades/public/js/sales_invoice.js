@@ -4,6 +4,78 @@ function update_selling_price_list_from_ars(frm, ars) {
 	return frm.set_value("selling_price_list", ars ? ars : "Venta estándar");
 }
 
+function get_cargar_facturas_setters(frm) {
+	const ars_df = frappe.meta.docfield_map["Sales Invoice"]["ars"];
+	const tipo_df = frappe.meta.docfield_map["Sales Invoice"]["tipo_de_factura"];
+	const is_servimerd = frm.doc.customer == "SERVIMERD";
+	const posting_date = frm.doc.posting_date || frappe.datetime.get_today();
+
+	return [
+		{
+			fieldtype: ars_df.fieldtype,
+			fieldname: "ars",
+			label: ars_df.label,
+			options: ars_df.options,
+			default: is_servimerd ? undefined : frm.doc.customer,
+			read_only: is_servimerd ? 0 : 1,
+		},
+		{
+			fieldtype: tipo_df.fieldtype,
+			fieldname: "tipo_de_factura",
+			label: tipo_df.label,
+			options: tipo_df.options,
+			default: is_servimerd ? "Servimerd" : undefined,
+		},
+		{
+			fieldtype: "Date Range",
+			fieldname: "posting_date_range",
+			label: __("Rango de Fechas"),
+			default: [
+				moment(posting_date).startOf("month").format("YYYY-MM-DD"),
+				posting_date,
+			],
+		},
+	];
+}
+
+function setup_cargar_facturas_date_filters(dialog) {
+	const original_get_args = dialog.get_args_for_search.bind(dialog);
+
+	dialog.get_datatable_columns = function () {
+		return ["name", "posting_date", "ars", "tipo_de_factura"];
+	};
+
+	dialog.get_args_for_search = function () {
+		const args = original_get_args();
+		const date_range = args.filters.posting_date_range;
+
+		delete args.filters.posting_date_range;
+
+		if (args.filter_fields) {
+			args.filter_fields = args.filter_fields.filter(
+				(field) => field !== "posting_date_range"
+			);
+		}
+
+		if (date_range && date_range.length === 2) {
+			const [from_date, to_date] = date_range;
+			if (from_date && to_date) {
+				args.filters.posting_date = ["between", [from_date, to_date]];
+			} else if (from_date) {
+				args.filters.posting_date = [">=", from_date];
+			} else if (to_date) {
+				args.filters.posting_date = ["<=", to_date];
+			}
+		}
+
+		if (args.filter_fields && !args.filter_fields.includes("posting_date")) {
+			args.filter_fields.push("posting_date");
+		}
+
+		return args;
+	};
+}
+
 frappe.ui.form.on("Sales Invoice", {
 	"setup": (frm) => {
 		$.each({"ars": "ars", "nss": "nss"}, (key, value) => {
@@ -38,43 +110,43 @@ frappe.ui.form.on("Sales Invoice", {
 			};
 		});
 
-		frm.set_query("item_code", "items", () => {
-			if (["Clientes Seguros", "Meds", "Servimerd"].includes(frm.doc.tipo_de_factura)) {
-				return {
-					"query": "rades.queries.item_by_ars",
-					"filters": {
-						"ars": frm.doc.ars,
-					},
-				};
-			}
+		// frm.set_query("item_code", "items", () => {
+		// 	if (["Clientes Seguros", "Meds", "Servimerd"].includes(frm.doc.tipo_de_factura)) {
+		// 		return {
+		// 			"query": "rades.queries.item_by_ars",
+		// 			"filters": {
+		// 				"ars": frm.doc.ars,
+		// 			},
+		// 		};
+		// 	}
 
-			let item_filter;
-			if (frm.doc.tipo_de_factura === "Proveedores") {
-				item_filter = "Consultas";
-			} else if (frm.doc.tipo_de_factura === "Alquiler") {
-				item_filter = "ALQUILER";
-			} else {
-				item_filter = ["not in", ["Consultas", "ALQUILER"]];
-			}
+		// 	let item_filter;
+		// 	if (frm.doc.tipo_de_factura === "Proveedores") {
+		// 		item_filter = "Consultas";
+		// 	} else if (frm.doc.tipo_de_factura === "Alquiler") {
+		// 		item_filter = "ALQUILER";
+		// 	} else {
+		// 		item_filter = ["not in", ["Consultas", "ALQUILER"]];
+		// 	}
 
-			return {
-				"filters": {
-					"item_name": item_filter,
-				},
-			};
-		});
+		// 	return {
+		// 		"filters": {
+		// 			"item_name": item_filter,
+		// 		},
+		// 	};
+		// });
 	},
 	"add_custom_button": (frm) => {
-		if (frm.doc.docstatus == 1) {
-			frm.add_custom_button(__("Actualizar informacion personal"), () => {
-				frappe.call(
-					"rades.sales_invoice.update_personal_info",
-					{"self": frm.doc}
-				).done(() => {
-					frappe.show_alert("Informacion Personal Actualizada", 10);
-					frm.reload_doc();
-				});
+		frm.add_custom_button(__("Actualizar informacion personal"), () => {
+			frappe.call(
+				"rades.sales_invoice.update_personal_info",
+				{"self": frm.doc}
+			).done(() => {
+				frappe.show_alert("Informacion Personal Actualizada", 10);
+				frm.reload_doc();
 			});
+		});
+		if (frm.doc.docstatus == 1) {
 		}
 	},
 	"onload_post_render": (frm) => {
@@ -250,12 +322,8 @@ frappe.ui.form.on("Sales Invoice", {
 				let d = new frappe.ui.form.MultiSelectDialog({
 					"doctype": "Sales Invoice",
 					"target": frm,
-					"date_field": "posting_date",
 					"page_length": 10000,
-					"setters": {
-						"ars": frm.doc.customer == "SERVIMERD" ? undefined: frm.doc.customer,
-						"tipo_de_factura": frm.doc.customer == "SERVIMERD" ? "Servimerd": undefined
-					},
+					"setters": get_cargar_facturas_setters(frm),
 					"get_query": () => {
 						return {
 							"filters": {
@@ -276,6 +344,9 @@ frappe.ui.form.on("Sales Invoice", {
 						rades.sales_invoice.add_row_and_update_sales_invoices(frm, selections, args);
 					}
 				});
+
+				setup_cargar_facturas_date_filters(d);
+				d.get_results();
 
 				d.dialog.fields_dict.ars.df.get_query = () => {
 					return {

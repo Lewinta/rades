@@ -72,9 +72,9 @@ frappe.ui.form.on("Customer", {
 	"customer_name": function(frm) {
 		frm.set_value('customer_name', frm.doc.customer_name.trim().toUpperCase())
 	},
-	"tax_id": function(frm) {
-		frm.set_value('tax_id', mask_ced_pas_rnc(frm.doc.tax_id.trim()))
-	},
+	// "tax_id": function(frm) {
+	// 	frm.set_value('tax_id', mask_ced_pas_rnc(frm.doc.tax_id.trim()))
+	// },
 	"ars": function(frm) {
 		frm.toggle_reqd("nss", !! frm.doc.ars);
 	},
@@ -93,6 +93,9 @@ frappe.ui.form.on("Customer", {
 		frm.trigger("refresh");
 	},
 	"hide_dashboard": function(frm) {
+		if (!frm.dashboard || !frm.dashboard.wrapper) {
+			return;
+		}
 		frm.dashboard.wrapper.parent().addClass("hide")
 			.parent().find(".section-head").addClass("collapsed")
 			.find(".octicon.collapse-indicator.octicon-chevron-up")
