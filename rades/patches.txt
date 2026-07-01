@@ -23,3 +23,4 @@ rades.patches.v1.add_ncf_to_sales_invoice
 rades.patches.v1.add_main_sb_to_sales_invoice
 rades.patches.v1.add_cobertura_to_sales_invoice
 rades.patches.v1.fix_draft_seguro_selling_price_list
+rades.patches.v1.set_precision_2_seguros_item_fields
