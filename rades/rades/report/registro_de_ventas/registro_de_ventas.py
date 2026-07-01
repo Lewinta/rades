@@ -24,6 +24,10 @@ def get_columns() -> list[dict]:
 
 
 def get_data(filters: frappe._dict) -> list[dict]:
+	return get_query(filters).run(as_dict=True)
+
+
+def get_query(filters: frappe._dict):
 	si = frappe.qb.DocType("Sales Invoice")
 
 	query = (
@@ -47,4 +51,7 @@ def get_data(filters: frappe._dict) -> list[dict]:
 	if filters.get("tipo_de_factura"):
 		query = query.where(si.tipo_de_factura == filters.tipo_de_factura)
 
-	return query.run(as_dict=True)
+	if filters.get("ars"):
+		query = query.where(si.ars == filters.ars)
+
+	return query
