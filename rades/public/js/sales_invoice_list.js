@@ -10,6 +10,7 @@ $.extend(frappe.listview_settings["Sales Invoice"], {
 		}
 
 		rades.sinv.set_customer_query(list);
+		rades.sinv.hide_customer_name_standard_filter(list);
 	}
 });
 
@@ -24,6 +25,17 @@ $.extend(rades.sinv, {
 					"customer_group": customer_group || "Clientes"
 				}
 			}
+		}
+	},
+	// customer_name (label "Nombre del Tercero") aparece como standard filter
+	// porque es el title_field de Sales Invoice (el list view siempre muestra el
+	// title_field como filtro, sin importar in_standard_filter). Como no queremos
+	// cambiar el title_field (afectaria el titulo mostrado del documento),
+	// ocultamos su control del area de filtros.
+	"hide_customer_name_standard_filter": function(list) {
+		var field = list.page.fields_dict.customer_name;
+		if (field && field.$wrapper) {
+			field.$wrapper.hide();
 		}
 	}
 });
