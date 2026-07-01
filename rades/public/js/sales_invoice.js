@@ -346,6 +346,11 @@ frappe.ui.form.on("Sales Invoice", {
 				});
 
 				setup_cargar_facturas_date_filters(d);
+
+				// Ensanchar el dialogo al 70% del viewport para que los filtros
+				// (setters) queden en una sola linea horizontal.
+				d.dialog.$wrapper.find(".modal-dialog").css("max-width", "70vw");
+
 				d.get_results();
 
 				d.dialog.fields_dict.ars.df.get_query = () => {
