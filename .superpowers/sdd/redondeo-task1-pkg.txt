@@ -1,0 +1,53 @@
+=== COMMITS ===
+5fe98b9 feat(seguros): precision=2 en montos aux de Sales Invoice Item (property setter)
+
+=== DIFF ===
+diff --git a/rades/patches.txt b/rades/patches.txt
+index d2542f3..3569841 100644
+--- a/rades/patches.txt
++++ b/rades/patches.txt
+@@ -17,9 +17,10 @@ rades.patches.v1.add_base_amount_to_sales_invoice
+ rades.patches.v1.add_monto_reclamado_to_sales_invoice
+ rades.patches.v1.add_monto_autorizado_to_sales_invoice
+ rades.patches.v1.add_diferencia_to_sales_invoice
+ rades.patches.v1.add_nss_to_customer
+ rades.patches.v1.add_ncf_to_sales_invoice
+ rades.patches.v1.add_ncf_to_sales_invoice
+ rades.patches.v1.add_main_sb_to_sales_invoice
+ rades.patches.v1.add_cobertura_to_sales_invoice
+-rades.patches.v1.fix_draft_seguro_selling_price_list
+\ No newline at end of file
++rades.patches.v1.fix_draft_seguro_selling_price_list
++rades.patches.v1.set_precision_2_seguros_item_fields
+\ No newline at end of file
+diff --git a/rades/patches/v1/set_precision_2_seguros_item_fields.py b/rades/patches/v1/set_precision_2_seguros_item_fields.py
+new file mode 100644
+index 0000000..01f9cf8
+--- /dev/null
++++ b/rades/patches/v1/set_precision_2_seguros_item_fields.py
+@@ -0,0 +1,25 @@
++import frappe
++
++FIELDS = ["claimed_amount", "authorized_amount", "difference_amount"]
++
++
++def execute():
++	"""Fija precision=2 en los montos aux de Sales Invoice Item.
++
++	Estos campos son Float sin precision, y el site tiene float_precision=4, por
++	lo que authorized_amount = base*cobertura guardaba 3-4 decimales y generaba
++	drift al agregar al Proveedor (que trabaja a 2 decimales). Idempotente:
++	make_property_setter reemplaza el Property Setter si ya existe.
++	"""
++	for fieldname in FIELDS:
++		frappe.make_property_setter(
++			{
++				"doctype": "Sales Invoice Item",
++				"fieldname": fieldname,
++				"property": "precision",
++				"value": "2",
++				"property_type": "Select",
++			},
++			is_system_generated=False,
++		)
++	frappe.clear_cache(doctype="Sales Invoice Item")

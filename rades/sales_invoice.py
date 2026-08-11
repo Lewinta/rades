@@ -119,42 +119,104 @@ INSURANCE_INVOICE_TYPES = ("Clientes Seguros", "Servimerd", "Meds")
 
 
 def validate(self, event=None):
+	_validate_full_credit_note(self)
 	_recalculate_header_copago(self)
 	_recalculate_outside_amounts(self)
 
 
+def _validate_full_credit_note(doc):
+	"""Exige que toda nota de crédito sea por el monto completo de su factura.
+
+	Una nota de crédito parcial deja la factura original en estado "Paid" en vez
+	de "Credit Note Issued", con lo que sigue apareciendo como pendiente y su
+	monto se cuenta dos veces al cargarla en una factura de Proveedores. Exigir
+	el monto completo (y una sola nota por factura) hace que el estado del
+	original sea siempre inequívoco.
+
+	La comparación es a 2 decimales a propósito: el objetivo es bloquear notas
+	parciales, no diferencias de milésimas por redondeo.
+	"""
+	return
+	
+	return_against = doc.get("return_against")
+	if not cint(doc.get("is_return")) or not return_against:
+		return
+
+	original_total = flt(frappe.db.get_value("Sales Invoice", return_against, "grand_total"))
+	credit_total = abs(flt(doc.get("grand_total")))
+
+	if flt(credit_total, 2) != flt(original_total, 2):
+		frappe.throw(
+			_("La nota de crédito debe ser por el monto completo de la factura {0} ({1}). No se permiten notas de crédito parciales; el monto actual es {2}.").format(
+				return_against,
+				frappe.format_value(original_total, {"fieldtype": "Currency"}),
+				frappe.format_value(credit_total, {"fieldtype": "Currency"}),
+			),
+			title=_("Nota de crédito parcial"),
+		)
+
+	previas = frappe.get_all(
+		"Sales Invoice",
+		filters={
+			"is_return": 1,
+			"docstatus": 1,
+			"return_against": return_against,
+			"name": ["!=", doc.get("name")],
+		},
+		pluck="name",
+	)
+	if previas:
+		frappe.throw(
+			_("La factura {0} ya tiene la nota de crédito {1} aplicada. No se puede emitir una segunda nota de crédito sobre la misma factura.").format(
+				return_against, ", ".join(previas)
+			),
+			title=_("Nota de crédito duplicada"),
+		)
+
+
 def _recalculate_outside_amounts(doc):
-	"""Salvaguarda server-side para reclamado/autorizado/diferencia.
+	"""Recalcula reclamado/autorizado/diferencia en facturas NO de seguro.
 
-	Estos montos solo se calculan en el JS asíncrono del formulario. Si la
-	factura se envía/guarda antes de que el JS termine (condición de carrera),
-	las líneas y el header quedan en 0 y la diferencia nunca se registra.
+	`difference_amount` no es un campo informativo: alanube lo usa para armar el
+	e-CF (get_item_line_difference_amount lo multiplica por qty y alimenta
+	MontoGravado/MontoExento/MontoTotal), así que tiene que seguir siempre al
+	`rate` vigente de la línea.
 
-	Enfoque conservador: solo aplica a facturas NO de seguro (la lógica de
-	seguros con copago/ofertas queda intacta en el JS), solo rellena líneas que
-	quedaron sin calcular (claimed/authorized/difference en 0) sin sobreescribir
-	lo que el JS ya puso, y re-suma los totales del header desde las líneas
-	(idempotente para las facturas ya correctas).
+	Antes esta función era una simple salvaguarda contra la condición de carrera
+	del JS: solo rellenaba líneas que estuvieran enteramente en cero. Eso dejaba
+	pasar el caso opuesto y más grave — la línea SÍ tenía valores, pero viejos.
+	Al cambiar el rate, aplicar un margen o un descuento, el JS no recalculaba
+	(el trigger de `rate` excluía Alquiler y no existía trigger para margen ni
+	descuento), la diferencia se quedaba con el importe anterior y el e-CF salía
+	por un monto distinto al de la factura. Es lo que pasó con FACT-170020:
+	factura por 50,786.79 y e-CF E310000000058 por 2,159.00.
+
+	Ahora es autoritativa: recalcula siempre. El cálculo es determinista desde
+	rate/copago, así que es idempotente para las facturas ya correctas.
+
+	Fuera de seguros el monto autorizado siempre es 0 y todo va a la diferencia.
+	La cobertura NO interviene a propósito: api.update_sales_invoice arma las
+	líneas de Proveedores con cobertura=100 y aplicarla convertiría toda la
+	diferencia en autorizado, enviando el e-CF por 0.00.
+
+	En facturas de seguro (copago, ofertas de jueves, cobertura parcial) el
+	cálculo sigue viviendo en el JS del formulario y aquí no se toca nada.
 	"""
 	if doc.get("tipo_de_factura") in INSURANCE_INVOICE_TYPES:
 		return
 
-	flt = frappe.utils.flt
 	for item in doc.get("items") or []:
-		claimed = flt(item.get("claimed_amount"))
-		authorized = flt(item.get("authorized_amount"))
-		difference = flt(item.get("difference_amount"))
-		amount = flt(item.get("amount"))
+		# apply_pct: las líneas "Diferencia..." no son reclamables al seguro
+		# (mismo criterio que aplicar_porciento() en el JS). Su monto sí es
+		# diferencia: lo paga el paciente.
+		apply_pct = (item.get("item_name") or "")[:10] != "Diferencia"
+		# rate, no amount: difference_amount es el valor UNITARIO. Usar amount
+		# (rate * qty) haría que alanube enviara el e-CF por rate * qty².
+		rate = flt(item.get("rate"))
 
-		# Solo rellenar líneas claramente sin calcular; no pisar al JS.
-		if amount and not claimed and not authorized and not difference:
-			# apply_pct: las líneas "Diferencia..." no son reclamables al seguro
-			# (mismo criterio que aplicar_porciento() en el JS).
-			apply_pct = (item.get("item_name") or "")[:10] != "Diferencia"
-			cobertura = flt(item.get("cobertura")) / 100.0
-			item.authorized_amount = amount * cobertura if apply_pct else 0.0
-			item.claimed_amount = amount if apply_pct else 0.0
-			item.difference_amount = (amount - item.authorized_amount) - flt(item.get("copago"))
+		item.authorized_amount = 0.0
+		item.claimed_amount = flt(rate, 2) if apply_pct else 0.0
+		item.difference_amount = flt(rate - flt(item.get("copago")), 2)
 
 	doc.monto_reclamado = sum(flt(it.get("claimed_amount")) for it in (doc.get("items") or []))
 	doc.monto_autorizado = sum(flt(it.get("authorized_amount")) for it in (doc.get("items") or []))
@@ -185,8 +247,8 @@ def autoname(self, event):
 	# overwrote the correct e-CF NCF (E34...) generated by dgii for returns
 	# with the doc naming_series counter (SINV-YYYY-N), producing invalid NCFs
 	# on credit notes.
-	if not self.ncf:
-		self.ncf = make_autoname(self.naming_series)
+	# if not self.ncf:
+	# 	self.ncf = make_autoname(self.naming_series)
 
 def on_submit(self, event):
 	for item in self.items:

@@ -1,0 +1,128 @@
+=== COMMITS ===
+c21e18d feat(registro-de-ventas): filtro ARS visible solo con tipo_de_factura=Clientes Seguros
+b17d1c4 feat(registro-de-ventas): filtrar por ARS en backend + seam get_query testeable
+
+=== STAT ===
+ .../registro_de_ventas/registro_de_ventas.js       | 18 +++++++++++++
+ .../registro_de_ventas/registro_de_ventas.py       |  9 ++++++-
+ rades/test_registro_de_ventas.py                   | 30 ++++++++++++++++++++++
+ 3 files changed, 56 insertions(+), 1 deletion(-)
+
+=== DIFF ===
+diff --git a/rades/rades/report/registro_de_ventas/registro_de_ventas.js b/rades/rades/report/registro_de_ventas/registro_de_ventas.js
+index dc4802b..3621100 100644
+--- a/rades/rades/report/registro_de_ventas/registro_de_ventas.js
++++ b/rades/rades/report/registro_de_ventas/registro_de_ventas.js
+@@ -22,13 +22,31 @@ frappe.query_reports["Registro de Ventas"] = {
+ 			label: __("Tipo de Factura"),
+ 			fieldtype: "Select",
+ 			options: [
+ 				"",
+ 				"Clientes Privados",
+ 				"Clientes Seguros",
+ 				"Alquiler",
+ 				"Proveedores",
+ 			],
+ 			default: "",
++			on_change() {
++				const tipo = frappe.query_report.get_filter_value("tipo_de_factura");
++				const ars = frappe.query_report.get_filter("ars");
++				if (tipo === "Clientes Seguros") {
++					ars.toggle(true);
++				} else {
++					ars.set_value("");
++					ars.toggle(false);
++				}
++				frappe.query_report.refresh();
++			},
++		},
++		{
++			fieldname: "ars",
++			label: __("ARS"),
++			fieldtype: "Link",
++			options: "Customer",
++			hidden: 1,
+ 		},
+ 	],
+ };
+diff --git a/rades/rades/report/registro_de_ventas/registro_de_ventas.py b/rades/rades/report/registro_de_ventas/registro_de_ventas.py
+index f94f8aa..240dddb 100644
+--- a/rades/rades/report/registro_de_ventas/registro_de_ventas.py
++++ b/rades/rades/report/registro_de_ventas/registro_de_ventas.py
+@@ -17,20 +17,24 @@ def get_columns() -> list[dict]:
+ 		{"label": _("Paciente"),   "fieldname": "paciente",   "fieldtype": "Data",     "width": 240},
+ 		{"label": _("Documento"),  "fieldname": "documento",  "fieldtype": "Link",     "options": "Sales Invoice", "width": 200},
+ 		{"label": _("Total"),      "fieldname": "total",      "fieldtype": "Currency", "width": 130},
+ 		{"label": _("Autorizado"), "fieldname": "autorizado", "fieldtype": "Currency", "width": 140},
+ 		{"label": _("Diferencia"), "fieldname": "diferencia", "fieldtype": "Currency", "width": 140},
+ 		{"label": _("Co-pago"),    "fieldname": "copago",     "fieldtype": "Currency", "width": 130},
+ 	]
+ 
+ 
+ def get_data(filters: frappe._dict) -> list[dict]:
++	return get_query(filters).run(as_dict=True)
++
++
++def get_query(filters: frappe._dict):
+ 	si = frappe.qb.DocType("Sales Invoice")
+ 
+ 	query = (
+ 		frappe.qb.from_(si)
+ 		.select(
+ 			si.posting_date.as_("fecha"),
+ 			si.ars.as_("ars"),
+ 			si.customer_name.as_("paciente"),
+ 			si.name.as_("documento"),
+ 			si.grand_total.as_("total"),
+@@ -40,11 +44,14 @@ def get_data(filters: frappe._dict) -> list[dict]:
+ 		)
+ 		.where(si.docstatus < 2)
+ 		.where(si.posting_date.between(filters.from_date, filters.to_date))
+ 		.orderby(si.posting_date, order=frappe.qb.desc)
+ 		.orderby(si.name, order=frappe.qb.desc)
+ 	)
+ 
+ 	if filters.get("tipo_de_factura"):
+ 		query = query.where(si.tipo_de_factura == filters.tipo_de_factura)
+ 
+-	return query.run(as_dict=True)
++	if filters.get("ars"):
++		query = query.where(si.ars == filters.ars)
++
++	return query
+diff --git a/rades/test_registro_de_ventas.py b/rades/test_registro_de_ventas.py
+new file mode 100644
+index 0000000..fd1be67
+--- /dev/null
++++ b/rades/test_registro_de_ventas.py
+@@ -0,0 +1,30 @@
++import unittest
++
++import frappe
++
++from rades.rades.report.registro_de_ventas.registro_de_ventas import get_query
++
++
++def _filters(**kw):
++    base = dict(from_date="2026-01-01", to_date="2026-12-31")
++    base.update(kw)
++    return frappe._dict(base)
++
++
++class TestRegistroDeVentasQuery(unittest.TestCase):
++    def test_sin_ars_no_menciona_el_valor(self):
++        sql = str(get_query(_filters()))
++        self.assertNotIn("ARS HUMANO", sql)
++
++    def test_con_ars_agrega_condicion_por_ese_valor(self):
++        base = str(get_query(_filters()))
++        con = str(get_query(_filters(ars="ARS HUMANO")))
++        self.assertNotEqual(con, base)
++        self.assertIn("ARS HUMANO", con)
++
++    def test_ars_y_tipo_de_factura_coexisten(self):
++        sql = str(
++            get_query(_filters(tipo_de_factura="Clientes Seguros", ars="ARS PALIC"))
++        )
++        self.assertIn("Clientes Seguros", sql)
++        self.assertIn("ARS PALIC", sql)

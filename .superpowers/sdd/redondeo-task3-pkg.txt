@@ -1,0 +1,102 @@
+=== COMMITS ===
+a44a8c1 fix(seguros): backfill recalcula diferencia (identidad) y recompone header desde items
+54209c7 feat(seguros): backfill redondeo 2 decimales en facturas existentes (solo campos aux)
+
+=== DIFF ===
+diff --git a/rades/maintenance/__init__.py b/rades/maintenance/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/rades/maintenance/round_seguros_amounts.py b/rades/maintenance/round_seguros_amounts.py
+new file mode 100644
+index 0000000..e6a86e4
+--- /dev/null
++++ b/rades/maintenance/round_seguros_amounts.py
+@@ -0,0 +1,88 @@
++import frappe
++from frappe.utils import flt
++
++# Bloque inicial a corregir (facturas con >2 decimales detectadas en el analisis).
++BLOCK_INVOICES = [
++	"FACT-93014", "FACT-93038", "FACT-93108",
++	"FACT-93129", "FACT-93184", "FACT-93364",
++]
++
++ITEM_FIELDS = ["claimed_amount", "authorized_amount", "difference_amount"]
++HEADER_FIELDS = ["monto_reclamado", "monto_autorizado", "diferencia"]
++
++
++def _dirty(v):
++	return round(flt(v), 2) != flt(v)
++
++
++def find_dirty(invoice_names=None):
++	"""Devuelve los SI (de la lista dada o BLOCK_INVOICES) con item/header a >2 dec."""
++	names = invoice_names or BLOCK_INVOICES
++	dirty = []
++	for name in names:
++		hdr = frappe.db.get_value("Sales Invoice", name, HEADER_FIELDS, as_dict=True)
++		if hdr and any(_dirty(hdr.get(f)) for f in HEADER_FIELDS):
++			dirty.append(name)
++			continue
++		items = frappe.get_all("Sales Invoice Item", filters={"parent": name}, fields=["name"] + ITEM_FIELDS)
++		if any(_dirty(it.get(f)) for it in items for f in ITEM_FIELDS):
++			dirty.append(name)
++	return dirty
++
++
++def run(invoice_names=None, dry_run=True):
++	"""Redondea a 2 decimales los montos aux de items y header.
++
++	La diferencia se RECALCULA como claimed - authorized - copago (misma
++	identidad que el JS), para preservar claimed = autorizado + diferencia +
++	copago. El header se recompone sumando las lineas ya redondeadas. Solo
++	campos auxiliares via db.set_value(update_modified=False): NO toca
++	rate/amount/grand_total/GL y NO re-somete. Idempotente.
++	"""
++	names = invoice_names or BLOCK_INVOICES
++	changed = []
++	for name in names:
++		items = frappe.get_all(
++			"Sales Invoice Item", filters={"parent": name},
++			fields=["name", "claimed_amount", "authorized_amount", "difference_amount", "copago"])
++		tot = {"monto_reclamado": 0.0, "monto_autorizado": 0.0, "diferencia": 0.0}
++		for it in items:
++			claimed_r = flt(it.get("claimed_amount"), 2)
++			authorized_r = flt(it.get("authorized_amount"), 2)
++			copago_r = flt(it.get("copago"), 2)
++			difference_r = flt(claimed_r - authorized_r - copago_r, 2)
++
++			tot["monto_reclamado"] += claimed_r
++			tot["monto_autorizado"] += authorized_r
++			tot["diferencia"] += difference_r
++
++			updates = {}
++			if flt(it.get("claimed_amount")) != claimed_r:
++				updates["claimed_amount"] = claimed_r
++			if flt(it.get("authorized_amount")) != authorized_r:
++				updates["authorized_amount"] = authorized_r
++			if flt(it.get("difference_amount")) != difference_r:
++				updates["difference_amount"] = difference_r
++			if updates:
++				changed.append(("item", it.name, updates))
++				if not dry_run:
++					frappe.db.set_value("Sales Invoice Item", it.name, updates, update_modified=False)
++
++		hdr = frappe.db.get_value("Sales Invoice", name, HEADER_FIELDS, as_dict=True) or {}
++		hupd = {}
++		for f in HEADER_FIELDS:
++			newv = flt(tot[f], 2)
++			if flt(hdr.get(f)) != newv:
++				hupd[f] = newv
++		if hupd:
++			changed.append(("header", name, hupd))
++			if not dry_run:
++				frappe.db.set_value("Sales Invoice", name, hupd, update_modified=False)
++
++	if not dry_run:
++		frappe.db.commit()
++
++	print("DRY_RUN" if dry_run else "APPLIED", "-> cambios:", len(changed))
++	for kind, ref, upd in changed:
++		print("  ", kind, ref, upd)
++	return {"dry_run": dry_run, "changes": len(changed)}

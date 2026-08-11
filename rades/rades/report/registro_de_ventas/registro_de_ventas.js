@@ -47,6 +47,13 @@ frappe.query_reports["Registro de Ventas"] = {
 			fieldtype: "Link",
 			options: "Customer",
 			hidden: 1,
+			get_query: () => {
+				return {
+					"filters": {
+						"customer_group": "Proveedores"
+					}
+				};
+			},
 		},
 	],
 };

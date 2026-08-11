@@ -3,6 +3,24 @@ import frappe
 import json
 from frappe.defaults import get_global_default
 
+# El campo item_type es requerido en Sales Invoice Item y NO tiene fetch_from,
+# por lo que set_missing_values() no lo copia del Item master (la línea tomaría
+# el default "Bien"). Además las opciones difieren entre ambos doctypes:
+#   Item master:        "Bienes" / "Servicios"  (plural)
+#   Sales Invoice Item: "Bien"   / "Servicio"   (singular, lo que espera la
+#                                                e-CF DGII vía alanube ItemType)
+ITEM_TYPE_MASTER_TO_LINE = {
+	"Bienes": "Bien",
+	"Servicios": "Servicio",
+}
+
+
+def map_item_type_to_line(master_item_type):
+	"""Mapea el item_type del Item master (plural) al del Sales Invoice Item
+	(singular). Devuelve "Bien" como fallback válido para el campo requerido
+	cuando el valor del master está ausente o no es reconocido."""
+	return ITEM_TYPE_MASTER_TO_LINE.get(master_item_type, "Bien")
+
 @frappe.whitelist()
 def update_sales_invoice(doc, selections, args):
 	json_object = json.loads(doc)
@@ -32,11 +50,18 @@ def update_sales_invoice(doc, selections, args):
 	if not frappe.get_value("Item", "Consultas"):
 		create_service_item()
 
+	# item_type es requerido en la línea y no se hereda solo del master; lo
+	# traemos explícitamente y lo mapeamos plural -> singular.
+	consultas_item_type = map_item_type_to_line(
+		frappe.get_value("Item", "Consultas", "item_type")
+	)
+
 	sinv.append("items", {
 		"item_code": "Consultas",
 		"item_name": "Consultas",
 		"description": "Consultas",
 		"item_group": "Servicios",
+		"item_type": consultas_item_type,
 		# stock_uom/uom intentionally omitted: set_missing_values() pulls them
 		# from the Item record, which keeps this portable across sites where
 		# the UOM name differs (csrd uses "Unidad" after the Unidad(es) merge).
@@ -45,7 +70,11 @@ def update_sales_invoice(doc, selections, args):
 		"qty": -1 if sinv.get("is_return") else 1,
 		"print_qty": invoices_qty,
 		"rate": total,
-		"authorized_amount": total,
+		# Facturas de Proveedores: el monto autorizado siempre es 0 y todo el
+		# total acumulado va a la diferencia (regla reforzada server-side en
+		# sales_invoice._recalculate_outside_amounts).
+		"authorized_amount": 0,
+		"difference_amount": total,
 		"amount": total,
 		"cobertura": 100
 	})
@@ -86,7 +115,9 @@ def create_service_item():
 		"item_name": "Consultas",
 		"description": "Consultas",
 		"income_account": default_income_account,
-		"item_group": "Servicios"
+		"item_group": "Servicios",
+		# item_type es requerido en el Item master; Consultas es un servicio.
+		"item_type": "Servicios"
 	})
 
 	item.insert()

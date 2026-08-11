@@ -9,6 +9,83 @@ def _unwrap_in_filter(value):
 	return value
 
 
+def _invoices_with_credit_note():
+	"""Facturas que ya tienen una nota de crédito enviada aplicada contra ellas.
+
+	Solo se consideran las notas de crédito enviadas (docstatus=1): un borrador
+	todavía puede descartarse, y excluir por él dejaría fuera facturas válidas.
+	"""
+	names = frappe.get_all(
+		"Sales Invoice",
+		filters={
+			"is_return": 1,
+			"docstatus": 1,
+			"return_against": ["is", "set"],
+		},
+		pluck="return_against",
+	)
+	return list({name for name in names if name})
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def cargar_facturas_query(doctype, txt, searchfield, start, page_len, filters):
+	"""Search Sales Invoices for the Cargar Facturas dialog."""
+	if isinstance(filters, str):
+		filters = frappe.parse_json(filters)
+	filters = filters or {}
+
+	query_filters = {}
+	for fieldname in ("customer_group", "ars", "tipo_de_factura", "status"):
+		value = filters.get(fieldname)
+		if value:
+			query_filters[fieldname] = value
+
+	# MultiSelectDialog performs its first search while Link defaults are still
+	# being initialized. These context values keep that first request consistent
+	# with the values already displayed in the controls.
+	if not query_filters.get("ars") and filters.get("supplier_ars"):
+		query_filters["ars"] = filters.get("supplier_ars")
+	if not query_filters.get("tipo_de_factura") and filters.get("allowed_tipo_de_factura"):
+		query_filters["tipo_de_factura"] = ["in", filters.get("allowed_tipo_de_factura")]
+	if not query_filters.get("status"):
+		query_filters["status"] = filters.get("default_status") or "Paid"
+
+	# Notas de crédito: nunca deben poder cargarse. La nota de crédito en sí es
+	# un monto negativo que no corresponde reclamar, y la factura original ya
+	# fue anulada por ella, así que cargar cualquiera de las dos duplica montos
+	# en la factura de proveedor.
+	query_filters["is_return"] = 0
+
+	invoices_with_credit_note = _invoices_with_credit_note()
+	if invoices_with_credit_note:
+		query_filters["name"] = ["not in", invoices_with_credit_note]
+
+	date_range = filters.get("posting_date_range")
+	if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+		from_date, to_date = date_range
+		if from_date and to_date:
+			query_filters["posting_date"] = ["between", [from_date, to_date]]
+		elif from_date:
+			query_filters["posting_date"] = [">=", from_date]
+		elif to_date:
+			query_filters["posting_date"] = ["<=", to_date]
+
+	search = "%{}%".format(txt)
+	return frappe.get_list(
+		"Sales Invoice",
+		filters=query_filters,
+		or_filters={
+			"name": ["like", search],
+			"ars": ["like", search],
+		} if txt else None,
+		fields=["name", "posting_date", "ars", "tipo_de_factura", "status"],
+		order_by="posting_date desc, name desc",
+		start=start,
+		page_length=page_len,
+	)
+
+
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def customer_query(doctype, txt, searchfield, start, page_len, filters):
