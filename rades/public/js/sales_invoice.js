@@ -7,8 +7,8 @@ function update_selling_price_list_from_ars(frm, ars) {
 function get_cargar_facturas_setters(frm) {
 	const ars_df = frappe.meta.docfield_map["Sales Invoice"]["ars"];
 	const tipo_df = frappe.meta.docfield_map["Sales Invoice"]["tipo_de_factura"];
+	const status_df = frappe.meta.docfield_map["Sales Invoice"]["status"];
 	const is_servimerd = frm.doc.customer == "SERVIMERD";
-	const posting_date = frm.doc.posting_date || frappe.datetime.get_today();
 
 	return [
 		{
@@ -27,52 +27,59 @@ function get_cargar_facturas_setters(frm) {
 			default: is_servimerd ? "Servimerd" : undefined,
 		},
 		{
+			fieldtype: status_df.fieldtype,
+			fieldname: "status",
+			label: status_df.label,
+			options: status_df.options,
+			default: "Paid",
+		},
+		{
 			fieldtype: "Date Range",
 			fieldname: "posting_date_range",
 			label: __("Rango de Fechas"),
-			default: [
-				moment(posting_date).startOf("month").format("YYYY-MM-DD"),
-				posting_date,
-			],
 		},
 	];
 }
 
-function setup_cargar_facturas_date_filters(dialog) {
-	const original_get_args = dialog.get_args_for_search.bind(dialog);
+function setup_cargar_facturas_loading(dialog) {
+	const original_get_results = dialog.get_results.bind(dialog);
+	const $results = dialog.$results;
+	let pending_requests = 0;
 
-	dialog.get_datatable_columns = function () {
-		return ["name", "posting_date", "ars", "tipo_de_factura"];
-	};
+	$results.css("position", "relative");
+	const $loading = $(`
+		<div class="cargar-facturas-loading">
+			<div>
+				<span class="spinner-border spinner-border-sm" role="status"></span>
+				<span>${__("Buscando facturas...")}</span>
+			</div>
+		</div>
+	`).css({
+		position: "absolute",
+		inset: 0,
+		display: "none",
+		"align-items": "center",
+		"justify-content": "center",
+		"z-index": 5,
+		background: "rgba(255, 255, 255, 0.82)",
+		"font-weight": 500,
+	});
+	$results.append($loading);
 
-	dialog.get_args_for_search = function () {
-		const args = original_get_args();
-		const date_range = args.filters.posting_date_range;
+	dialog.get_results = async function (...args) {
+		pending_requests += 1;
+		$loading.css("display", "flex");
+		dialog.dialog.get_primary_btn().prop("disabled", true);
 
-		delete args.filters.posting_date_range;
-
-		if (args.filter_fields) {
-			args.filter_fields = args.filter_fields.filter(
-				(field) => field !== "posting_date_range"
-			);
-		}
-
-		if (date_range && date_range.length === 2) {
-			const [from_date, to_date] = date_range;
-			if (from_date && to_date) {
-				args.filters.posting_date = ["between", [from_date, to_date]];
-			} else if (from_date) {
-				args.filters.posting_date = [">=", from_date];
-			} else if (to_date) {
-				args.filters.posting_date = ["<=", to_date];
+		try {
+			return await original_get_results(...args);
+		} finally {
+			pending_requests -= 1;
+			if (pending_requests === 0) {
+				$loading.hide();
+				dialog.dialog.get_primary_btn().prop("disabled", false);
 			}
 		}
-
-		if (args.filter_fields && !args.filter_fields.includes("posting_date")) {
-			args.filter_fields.push("posting_date");
-		}
-
-		return args;
 	};
 }
 
@@ -90,6 +97,7 @@ frappe.ui.form.on("Sales Invoice", {
 			() => frm.is_new() && frm.trigger("cobertura"),
 			() => frm.trigger("add_custom_button")
 		]);
+		toggle_proveedores_print_qty_field(frm);
 		let show = frappe.user.has_role("Accounts Manager");
 		frm.toggle_enable("ncf", show);
 		
@@ -145,7 +153,7 @@ frappe.ui.form.on("Sales Invoice", {
 				frappe.show_alert("Informacion Personal Actualizada", 10);
 				frm.reload_doc();
 			});
-		});
+		}, __("Actions"));
 		if (frm.doc.docstatus == 1) {
 		}
 	},
@@ -157,6 +165,7 @@ frappe.ui.form.on("Sales Invoice", {
 		frm.is_new() && frm.trigger("customer");
 		frm.is_new() && !frm.doc.is_return && frm.trigger("show_prompt");
 		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
+		toggle_proveedores_print_qty_field(frm);
 
 		frm.trigger("set_queries");
 	},
@@ -167,6 +176,7 @@ frappe.ui.form.on("Sales Invoice", {
 			frm.set_value("customer", null);
 		}
 		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
+		toggle_proveedores_print_qty_field(frm);
 	},
 	"before_submit": (frm) => {
 		if ( frm.doc.tipo_de_factura == "Clientes Seguros" && !frm.doc.medico) {
@@ -323,14 +333,22 @@ frappe.ui.form.on("Sales Invoice", {
 					"doctype": "Sales Invoice",
 					"target": frm,
 					"page_length": 10000,
+					"columns": ["name", "posting_date", "ars", "tipo_de_factura", "status"],
 					"setters": get_cargar_facturas_setters(frm),
 					"get_query": () => {
 						return {
+							"query": "rades.queries.cargar_facturas_query",
 							"filters": {
 								"customer_group": "Clientes",
-								"tipo_de_factura": ["in", "Clientes Seguros, Meds, Servimerd"],
-								"payment_status": frm.doc.is_return == 1? "PAID": "UNPAID",
-								"docstatus": 1,
+								"supplier_ars": frm.doc.customer == "SERVIMERD"
+									? undefined
+									: frm.doc.customer,
+								"allowed_tipo_de_factura": [
+									"Clientes Seguros",
+									"Meds",
+									"Servimerd",
+								],
+								"default_status": "Paid",
 							}
 						};
 					},
@@ -345,7 +363,7 @@ frappe.ui.form.on("Sales Invoice", {
 					}
 				});
 
-				setup_cargar_facturas_date_filters(d);
+				setup_cargar_facturas_loading(d);
 
 				// Ensanchar el dialogo para que los filtros (setters) quepan
 				// en una sola linea horizontal.
@@ -354,7 +372,7 @@ frappe.ui.form.on("Sales Invoice", {
 				// Frappe reparte los setters en 3 columnas (index % 3) y cada
 				// .form-column envuelve sus controles en un <form>, por lo que el
 				// buscador y "Rango de Fechas" quedan apilados. En vez de pelear con
-				// ese anidamiento, movemos los 4 controles a una fila flex propia.
+				// ese anidamiento, movemos los 5 controles a una fila flex propia.
 				const $wrapper = d.dialog.$wrapper;
 				const $filtros = $(
 					'<div class="cargar-facturas-filtros"></div>'
@@ -369,6 +387,7 @@ frappe.ui.form.on("Sales Invoice", {
 					"search_term",
 					"ars",
 					"tipo_de_factura",
+					"status",
 					"posting_date_range",
 				];
 				filtros_orden.forEach((fieldname) => {
@@ -383,8 +402,6 @@ frappe.ui.form.on("Sales Invoice", {
 						.appendTo($filtros);
 				});
 				$filtros.prependTo($wrapper.find(".modal-body"));
-
-				d.get_results();
 
 				d.dialog.fields_dict.ars.df.get_query = () => {
 					return {
@@ -405,7 +422,13 @@ frappe.ui.form.on("Sales Invoice", {
 
 		const apply_pct = aplicar_porciento(row);
 		const cobertura = flt(row.cobertura) / 100.0;
-		const thursday_clearance = has_clearance(row, frm) && es_jueves(frm);
+		// La oferta de jueves manda toda la brecha al copago y deja la diferencia
+		// en 0. has_clearance() solo mira ofertas_jueves, sin filtrar por tipo de
+		// factura, asi que en una factura NO de seguro (donde el autorizado es 0
+		// y la brecha es el rate completo) el copago se comia el rate entero y el
+		// e-CF habria salido por 0.00. El copago es un concepto de seguros.
+		const thursday_clearance =
+			is_insurance_invoice(frm) && has_clearance(row, frm) && es_jueves(frm);
 
 		// En facturas de seguros los campos se calculan desde el precio base
 		// (price_list_rate); el rate ajustado por copago/descuento generaria
@@ -431,6 +454,9 @@ frappe.ui.form.on("Sales Invoice", {
 
 		refresh_field("items");
 		frm.trigger("refresh_outside_amounts");
+	},
+	"items_on_form_rendered": (frm) => {
+		show_print_qty_in_item_detail(frm);
 	},
 	"refresh_outside_amounts": (frm) => {
 		let total_authorized_amount = 0.0;
@@ -487,10 +513,12 @@ frappe.ui.form.on("Sales Invoice Item", {
 			() => frappe.timeout(0.3),
 			() => condition && frm.events.item_table_update(frm, cdt, cdn),
 			() => frappe.timeout(1.3),
-			() => { if(frm.doc.tipo_de_factura == "Alquiler") {
-				frappe.model.set_value(cdt, cdn, "claimed_amount", row.rate);
-				frappe.model.set_value(cdt, cdn, "difference_amount", row.rate);
-			} },
+			// Antes este paso corria solo para Alquiler y leia una variable `row`
+			// global que solo se asigna en la rama de referidos de arriba: fuera
+			// de ese flujo quedaba stale (linea de otra invocacion) o undefined.
+			// Ahora se recalcula desde la linea real; la propia funcion ignora
+			// las facturas de seguro.
+			() => sync_outside_amounts_from_rate(frm, cdt, cdn),
 			() => frm.cscript.calculate_paid_amount(),
 			() => frm.refresh_fields()
 		]);
@@ -505,8 +533,10 @@ frappe.ui.form.on("Sales Invoice Item", {
 		row.__referral_pct = flt(row.discount_percentage);
 
 		frappe.run_serially([
-			() => frappe.timeout(0.3),
-			() => frm.events.item_table_update(frm, cdt, cdn),
+			() => frappe.timeout(0.5),
+			() => is_insurance_invoice(frm)
+				? frm.events.item_table_update(frm, cdt, cdn)
+				: sync_outside_amounts_from_rate(frm, cdt, cdn),
 		]);
 	},
 	"qty": (frm, cdt, cdn) => {
@@ -515,11 +545,44 @@ frappe.ui.form.on("Sales Invoice Item", {
 			() => frm.events.item_table_update(frm, cdt, cdn),
 		]);
 	},
+	// El rate se teclea a mano en Alquiler/Proveedores/Clientes Privados. Antes
+	// Alquiler quedaba fuera de las dos ramas (ni item_table_update ni el sync
+	// de Proveedores), asi que cambiar el monto no movia la diferencia y el e-CF
+	// salia por el importe viejo.
 	"rate": (frm, cdt, cdn) => {
-		let condition = frm.doc.tipo_de_factura != "Alquiler" && frm.doc.tipo_de_factura != "Proveedores" ? true : false
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
-			() => condition && frm.events.item_table_update(frm, cdt, cdn),
+			() => is_insurance_invoice(frm)
+				? frm.events.item_table_update(frm, cdt, cdn)
+				: sync_outside_amounts_from_rate(frm, cdt, cdn),
+		]);
+	},
+	// Margen, descuento y precio de lista tambien mueven el rate y ninguno tenia
+	// trigger: aplicar un margen dejaba la diferencia intacta. Se usa el sync
+	// ligero (no item_table_update) para no reentrar en apply_copago_discount,
+	// que a su vez escribe discount_amount/margin_rate_or_amount.
+	"margin_rate_or_amount": (frm, cdt, cdn) => {
+		frappe.run_serially([
+			() => frappe.timeout(0.5),
+			() => sync_outside_amounts_from_rate(frm, cdt, cdn),
+		]);
+	},
+	"margin_type": (frm, cdt, cdn) => {
+		frappe.run_serially([
+			() => frappe.timeout(0.5),
+			() => sync_outside_amounts_from_rate(frm, cdt, cdn),
+		]);
+	},
+	"discount_amount": (frm, cdt, cdn) => {
+		frappe.run_serially([
+			() => frappe.timeout(0.5),
+			() => sync_outside_amounts_from_rate(frm, cdt, cdn),
+		]);
+	},
+	"price_list_rate": (frm, cdt, cdn) => {
+		frappe.run_serially([
+			() => frappe.timeout(0.5),
+			() => sync_outside_amounts_from_rate(frm, cdt, cdn),
 		]);
 	},
 	"cobertura": (frm, cdt, cdn) => {
@@ -535,11 +598,15 @@ frappe.ui.form.on("Sales Invoice Item", {
 	"copago": (frm, cdt, cdn) => {
 		const row = frappe.get_doc(cdt, cdn);
 		const base = is_insurance_invoice(frm) ? get_base_rate(row) : flt(row.rate);
-		const gross_difference = base - flt(row.authorized_amount);
+		// Se redondea a 2 decimales igual que en item_table_update: sin esto,
+		// base - authorized_amount arrastra error de punto flotante (ej. 631 -
+		// 536.35 = 94.6499999...) y un copago legitimo igual a la brecha (94.65)
+		// se rechazaba por milesimas.
+		const gross_difference = flt(base - flt(row.authorized_amount), 2);
 
 		// Copago positivo: descuenta de la brecha total, no puede excederla.
 		// Copago negativo: aumenta la diferencia neta (el rate sube), se permite.
-		if (flt(row.copago) > 0 && flt(row.copago) > gross_difference) {
+		if (flt(row.copago, 2) > 0 && flt(row.copago, 2) > gross_difference) {
 			frappe.throw("El copago no puede ser mayor a la diferencia");
 			return;
 		}
@@ -660,6 +727,56 @@ function is_insurance_invoice(frm) {
 	return ["Clientes Seguros", "Servimerd", "Meds"].includes(frm.doc.tipo_de_factura);
 }
 
+// print_qty (Cantidad Real ARS): fuera del grid; visible al expandir la linea
+// en facturas de Proveedores, junto a los montos de la linea.
+function toggle_proveedores_print_qty_field(frm) {
+	const grid = frm.fields_dict.items && frm.fields_dict.items.grid;
+	if (!grid) return;
+
+	grid.update_docfield_property("print_qty", "in_list_view", 0);
+	grid.update_docfield_property("print_qty", "hidden", 0);
+}
+
+// Fuera de las facturas de seguro, reclamado/autorizado/diferencia se derivan
+// unicamente del rate vigente de la linea: el autorizado siempre es 0 y todo va
+// a la diferencia (misma regla que api.update_sales_invoice y que
+// sales_invoice._recalculate_outside_amounts en el servidor).
+//
+// difference_amount NO es informativo: alanube lo usa para armar el e-CF, asi
+// que todo lo que mueva el rate -teclearlo, un margen, un descuento, el precio
+// de lista- tiene que pasar por aqui o el e-CF sale por un monto distinto al de
+// la factura. Es lo que le paso a FACT-170020.
+//
+// A proposito no toca discount_amount ni margin_rate_or_amount: si lo hiciera,
+// reentraria en apply_copago_discount y en los triggers nativos de ERPNext.
+function sync_outside_amounts_from_rate(frm, cdt, cdn) {
+	// En seguros el rate es consecuencia del copago/cobertura y el calculo lo
+	// hace item_table_update; aqui no se toca nada.
+	if (is_insurance_invoice(frm)) return;
+
+	const row = frappe.get_doc(cdt, cdn);
+	if (!row || !row.item_code) return;
+
+	const rate = flt(row.rate, 2);
+	const apply_pct = aplicar_porciento(row);
+
+	row.authorized_amount = 0;
+	row.claimed_amount    = apply_pct ? rate : 0;
+	row.difference_amount = flt(rate - flt(row.copago), 2);
+
+	refresh_field("items");
+	frm.trigger("refresh_outside_amounts");
+}
+
+function show_print_qty_in_item_detail(frm) {
+	const grid_form = frappe.ui.form.get_open_grid_form();
+	if (!grid_form || !grid_form.fields_dict.print_qty) return;
+
+	const is_proveedor = frm.doc.tipo_de_factura === "Proveedores";
+	grid_form.set_df_property("print_qty", "hidden", 0);
+	grid_form.toggle_display("print_qty", is_proveedor);
+}
+
 // Precio base de la linea: el precio de lista, nunca el rate ya ajustado por
 // descuentos/copago, para evitar dependencia circular en los calculos de seguro.
 function get_base_rate(row) {
@@ -768,3 +885,36 @@ function get_today(frm){
 	return weekday
 }
 
+// ERPNext vuelve a distribuir los pagos POS cada vez que recalcula los totales.
+// En una nota de crédito con varios medios de pago, esa redistribución concentra
+// el monto en el método predeterminado y pierde el desglose de la factura origen.
+// Rades ya crea esos pagos en negativo; aquí evitamos que el recálculo los pise.
+(function preserve_pos_return_payment_distribution() {
+	const taxes_and_totals = erpnext.taxes_and_totals && erpnext.taxes_and_totals.prototype;
+	if (!taxes_and_totals || taxes_and_totals.__rades_preserves_return_payments) {
+		return;
+	}
+
+	const set_default_payment = taxes_and_totals.set_total_amount_to_default_mop;
+	taxes_and_totals.set_total_amount_to_default_mop = async function (...args) {
+		const doc = this.frm && this.frm.doc;
+		const payment_count = (doc && doc.payments ? doc.payments : []).filter(
+			(payment) => Math.abs(flt(payment.amount)) > 0
+		).length;
+
+		if (
+			doc &&
+			doc.doctype === "Sales Invoice" &&
+			doc.is_pos &&
+			doc.is_return &&
+			doc.return_against &&
+			payment_count > 1
+		) {
+			return;
+		}
+
+		return set_default_payment.apply(this, args);
+	};
+
+	taxes_and_totals.__rades_preserves_return_payments = true;
+})();
