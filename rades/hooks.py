@@ -126,6 +126,7 @@ doc_events = {
 		"validate": "rades.sales_invoice.validate",
 		"before_cancel": "rades.sales_invoice.before_cancel",
 		"on_submit": "rades.sales_invoice.on_submit",
+		"on_update_after_submit": "rades.sales_invoice.on_update_after_submit",
 		"on_cancel": "rades.sales_invoice.on_cancel",
 	},
 	"Customer": {

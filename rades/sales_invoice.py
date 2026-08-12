@@ -657,3 +657,68 @@ def on_cancel(self, event):
 
 	frappe.db.commit()
 
+
+PAYMENT_ACCOUNTING_FIELDS = ("mode_of_payment", "account", "amount", "base_amount")
+
+
+def on_update_after_submit(doc, event=None):
+	"""Repost GL when POS payment rows change after submit.
+
+	ERPNext auto-reposts income/tax account edits but ignores the payments
+	child table. POS cash/bank lines come from payment.account, so MoP/account
+	corrections must trigger Repost Accounting Ledger.
+	"""
+	if not cint(doc.get("is_pos")):
+		return
+
+	if getattr(doc, "needs_repost", False):
+		# Core already reposted in this save using current payment values.
+		return
+
+	if not _payments_accounting_changed(doc):
+		return
+
+	doc.validate_for_repost()
+	doc.repost_accounting_entries()
+	frappe.msgprint(
+		_("Accounting entries were reposted because Mode of Payment / payment account changed."),
+		indicator="green",
+		alert=True,
+	)
+
+
+def _payments_accounting_changed(doc):
+	"""Return True if payment accounting fields changed; block add/remove rows."""
+	before = doc.get_doc_before_save()
+	if not before:
+		return False
+
+	before_rows = before.get("payments") or []
+	after_rows = doc.get("payments") or []
+
+	before_by_name = {row.name: row for row in before_rows if row.name}
+	after_by_name = {row.name: row for row in after_rows if row.name}
+	has_new_rows = any(not row.name for row in after_rows)
+
+	if has_new_rows or set(before_by_name) != set(after_by_name) or len(before_rows) != len(after_rows):
+		frappe.throw(
+			_(
+				"Cannot add or remove payment rows after submit. "
+				"Edit Mode of Payment / Account on existing rows only, or cancel and amend."
+			),
+			title=_("Payment rows changed"),
+		)
+
+	for name, before_row in before_by_name.items():
+		after_row = after_by_name[name]
+		for field in PAYMENT_ACCOUNTING_FIELDS:
+			before_val = before_row.get(field)
+			after_val = after_row.get(field)
+			if field in ("amount", "base_amount"):
+				if flt(before_val) != flt(after_val):
+					return True
+			elif before_val != after_val:
+				return True
+
+	return False
+

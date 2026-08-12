@@ -4,6 +4,28 @@ function update_selling_price_list_from_ars(frm, ars) {
 	return frm.set_value("selling_price_list", ars ? ars : "Venta estándar");
 }
 
+function _payment_accounting_signature(payments) {
+	return (payments || [])
+		.map((row) =>
+			[
+				row.name || "",
+				row.mode_of_payment || "",
+				row.account || "",
+				flt(row.amount),
+				flt(row.base_amount),
+			].join("|")
+		)
+		.join(";");
+}
+
+function _submitted_pos_payments_may_repost(frm) {
+	const before = frm._rades_payments_before_edit;
+	if (!before) {
+		return frm.is_dirty();
+	}
+	return _payment_accounting_signature(frm.doc.payments) !== before;
+}
+
 function get_cargar_facturas_setters(frm) {
 	const ars_df = frappe.meta.docfield_map["Sales Invoice"]["ars"];
 	const tipo_df = frappe.meta.docfield_map["Sales Invoice"]["tipo_de_factura"];
@@ -100,7 +122,25 @@ frappe.ui.form.on("Sales Invoice", {
 		toggle_proveedores_print_qty_field(frm);
 		let show = frappe.user.has_role("Accounts Manager");
 		frm.toggle_enable("ncf", show);
-		
+		if (frm.doc.docstatus === 1 && cint(frm.doc.is_pos)) {
+			frm._rades_payments_before_edit = _payment_accounting_signature(frm.doc.payments);
+		} else {
+			frm._rades_payments_before_edit = null;
+		}
+	},
+	"before_save": (frm) => {
+		if (frm.doc.docstatus !== 1 || !cint(frm.doc.is_pos)) {
+			return;
+		}
+		if (!_submitted_pos_payments_may_repost(frm)) {
+			return;
+		}
+		frappe.show_alert({
+			message: __(
+				"Saving will rebuild accounting entries if Mode of Payment / payment account changed."
+			),
+			indicator: "orange",
+		});
 	},
 	set_queries: (frm) => {
 		frm.set_query("customer", () => {
