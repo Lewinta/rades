@@ -119,9 +119,50 @@ INSURANCE_INVOICE_TYPES = ("Clientes Seguros", "Servimerd", "Meds")
 
 
 def validate(self, event=None):
+	_restore_seguro_selling_price_list(self)
 	_validate_full_credit_note(self)
 	_recalculate_header_copago(self)
 	_recalculate_outside_amounts(self)
+
+
+def _restore_seguro_selling_price_list(doc):
+	"""Devuelve a la factura de seguro la lista de precios de su ARS.
+
+	ERPNext SalesInvoice.set_pos_fields también corre al validar y, con is_pos=1,
+	sobrescribe selling_price_list con customer.default_price_list ->
+	customer_group.default_price_list -> POS Profile, que es "Venta estándar".
+	Así, desde la migración de junio de 2026 todas las facturas de seguro se
+	guardaban con la lista privada: los rates cotizados antes de guardar venían de
+	la ARS, pero al reabrir el borrador cada línea nueva salía al precio privado
+	(FACT-95232: Mamografia Bilateral a 3,000 en vez de 1,320 de SENASA).
+
+	Este hook corre después del validate de ERPNext, así que repone la lista que
+	el formulario ya había puesto desde el ARS. Solo cambia el nombre de la lista:
+	no re-cotiza líneas. Se omite si la lista no existe, está deshabilitada o está
+	en otra moneda, para no dejar plc_conversion_rate incoherente.
+	"""
+	if doc.get("tipo_de_factura") not in INSURANCE_INVOICE_TYPES:
+		return
+
+	# La NC hereda la lista de la factura original; cambiarla la re-cotiza.
+	if cint(doc.get("is_return")):
+		return
+
+	expected = expected_selling_price_list_for_seguro(doc.get("ars"))
+	if doc.get("selling_price_list") == expected:
+		return
+
+	currency = _enabled_price_list_currency(expected)
+	if not currency or currency != doc.get("price_list_currency"):
+		return
+
+	doc.selling_price_list = expected
+
+
+def _enabled_price_list_currency(price_list):
+	return frappe.db.get_value(
+		"Price List", {"name": price_list, "enabled": 1, "selling": 1}, "currency"
+	)
 
 
 def _validate_full_credit_note(doc):

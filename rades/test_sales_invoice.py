@@ -1,9 +1,13 @@
 import unittest
+from unittest.mock import patch
 
 import frappe
 import frappe.utils.data as frappe_data
 
-from rades.sales_invoice import _recalculate_outside_amounts
+from rades.sales_invoice import (
+	_recalculate_outside_amounts,
+	_restore_seguro_selling_price_list,
+)
 
 
 def setUpModule():
@@ -168,3 +172,74 @@ class TestRecalculateOutsideAmounts(unittest.TestCase):
 		_recalculate_outside_amounts(doc)
 		self.assertEqual(doc["items"][0].difference_amount, 1000.0)
 		self.assertEqual(doc.diferencia, 1000.0)
+
+class TestRestoreSeguroSellingPriceList(unittest.TestCase):
+	"""ERPNext set_pos_fields pisa la lista de precios al validar una factura POS.
+
+	Con is_pos=1 elige customer.default_price_list -> customer_group -> POS
+	Profile, o sea "Venta estándar", aunque la factura sea de una ARS. Desde la
+	migración de junio de 2026 todas las facturas de seguro de csrd quedaron así, y
+	al reabrir un borrador cada línea nueva se cotizaba al precio privado
+	(FACT-95232: Mamografia Bilateral a 3,000 en vez de 1,320 de SENASA).
+	"""
+
+	def setUp(self):
+		patcher = patch(
+			"rades.sales_invoice._enabled_price_list_currency",
+			side_effect=lambda name: {
+				"ARS SENASA CONTRIBUTIVO": "DOP",
+				"Meds": "DOP",
+				"Venta estándar": "DOP",
+				"ARS EN DOLARES": "USD",
+			}.get(name),
+		)
+		patcher.start()
+		self.addCleanup(patcher.stop)
+
+	def _factura(self, tipo, ars, **kw):
+		header = dict(
+			ars=ars,
+			is_return=0,
+			selling_price_list="Venta estándar",
+			price_list_currency="DOP",
+		)
+		header.update(kw)
+		return _doc(tipo, [], **header)
+
+	def test_seguro_recupera_la_lista_de_la_ars(self):
+		doc = self._factura("Clientes Seguros", "ARS SENASA CONTRIBUTIVO")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "ARS SENASA CONTRIBUTIVO")
+
+	def test_meds_usa_su_propia_lista(self):
+		doc = self._factura("Meds", "Meds")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Meds")
+
+	def test_servimerd_sin_ars_queda_en_venta_estandar(self):
+		doc = self._factura("Servimerd", None, selling_price_list="Meds")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Venta estándar")
+
+	def test_nota_de_credito_no_se_toca(self):
+		# La NC hereda la lista de la factura original; cambiarla la re-cotiza.
+		doc = self._factura("Clientes Seguros", "ARS SENASA CONTRIBUTIVO", is_return=1)
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Venta estándar")
+
+	def test_factura_privada_no_se_toca(self):
+		doc = self._factura("Clientes Privados", "ARS SENASA CONTRIBUTIVO")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Venta estándar")
+
+	def test_lista_inexistente_o_deshabilitada_no_se_toca(self):
+		doc = self._factura("Clientes Seguros", "ARS SIN LISTA")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Venta estándar")
+
+	def test_lista_en_otra_moneda_no_se_toca(self):
+		# plc_conversion_rate ya se validó para la moneda actual; no se cambia
+		# a una lista que la dejaría incoherente.
+		doc = self._factura("Clientes Seguros", "ARS EN DOLARES")
+		_restore_seguro_selling_price_list(doc)
+		self.assertEqual(doc.selling_price_list, "Venta estándar")
