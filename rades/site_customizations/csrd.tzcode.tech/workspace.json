@@ -1,6 +1,6 @@
 [
  {
-  "app": "erpnext",
+  "app": null,
   "charts": [
    {
     "chart_name": "Ventas por D\u00eda",
@@ -323,7 +323,7 @@
   ],
   "modified": "2026-09-17 12:13:02.562718",
   "modified_by": "Administrator",
-  "module": "Selling",
+  "module": null,
   "name": "CSRD",
   "number_cards": [],
   "owner": "Administrator",
