@@ -1,6 +1,19 @@
 frappe.provide("rades.sales_invoice");
 
+// En una devolucion la lista de precios se hereda de la factura original y no se
+// toca. Cambiarla hace que ERPNext re-cotice TODAS las lineas, y si el precio
+// vigente en la lista nueva supera el rate de la factura, ERPNext rechaza la nota
+// con "Row # N: Rate cannot be greater than the rate used in Sales Invoice ...".
+//
+// Es lo que rompia las NC de Clientes Seguros: la factura se guarda con
+// "Venta estandar" mientras que el cliente tiene ARS, asi que al abrir la NC el
+// trigger de customer cambiaba la lista a la de la ARS y re-cotizaba. En
+// FACT-170537 eso movio RX MIEMBRO INFERIOR AP Y LAT de 534.90 (Venta estandar) a
+// 535.48 (SEGURO FAMILIAR DE SALUD) y la nota ya no se podia guardar.
 function update_selling_price_list_from_ars(frm, ars) {
+	if (frm.doc.is_return) {
+		return;
+	}
 	return frm.set_value("selling_price_list", ars ? ars : "Venta estándar");
 }
 
@@ -116,7 +129,11 @@ frappe.ui.form.on("Sales Invoice", {
 		frappe.run_serially([
 			() => frappe.timeout(1),
 			() => frm.trigger("hide_dashboard"),
-			() => frm.is_new() && frm.trigger("cobertura"),
+			// En una devolucion la cobertura ya viene en cada linea copiada de la
+			// factura. Re-empujarla dispara item_table_update, que re-deriva el
+			// rate via apply_copago_discount y puede dejarlo por encima del de la
+			// factura original.
+			() => frm.is_new() && !frm.doc.is_return && frm.trigger("cobertura"),
 			() => frm.trigger("add_custom_button")
 		]);
 		toggle_proveedores_print_qty_field(frm);
@@ -202,7 +219,11 @@ frappe.ui.form.on("Sales Invoice", {
 			frm.doc.cobertura = frappe.boot.conf.autorizado_por_seguros;
 		}
 
-		frm.is_new() && frm.trigger("customer");
+		// El trigger de customer reconstruye la factura desde cero: relee nss/ars,
+		// cambia la lista de precios, reajusta cobertura y rearma la tabla de
+		// pagos. Todo eso pisa lo que make_sales_return ya copio de la factura
+		// original, asi que en una devolucion no debe correr.
+		frm.is_new() && !frm.doc.is_return && frm.trigger("customer");
 		frm.is_new() && !frm.doc.is_return && frm.trigger("show_prompt");
 		frm.toggle_reqd("cobertura", frm.doc.tipo_de_factura == "Clientes Seguros");
 		toggle_proveedores_print_qty_field(frm);
@@ -357,6 +378,23 @@ frappe.ui.form.on("Sales Invoice", {
 				frm.toggle_display("ars", false);
 			}
 
+			// Proveedores y Alquiler facturan a la aseguradora o al arrendatario,
+			// no a un paciente: nunca llevan ARS ni NSS. Sin esta rama nadie los
+			// limpiaba, porque el trigger de tipo_de_factura solo borra customer y
+			// el get_party_details de ERPNext solo repone selling_price_list. Si el
+			// cajero elegia un paciente en Clientes Seguros y despues cambiaba el
+			// tipo, el ARS/NSS del paciente sobrevivia hasta el submit (y ambos son
+			// read_only, asi que no habia forma de corregirlo desde el formulario).
+			// Fue lo que dejo "HUMANO SEGUROS, SA" en FACT-94908, una factura a ARS APS.
+			if (["Proveedores", "Alquiler"].includes(frm.doc.tipo_de_factura)) {
+				let fields_dict = {
+					"ars": null,
+					"nss": null,
+				};
+
+				!frm.doc.is_return && $.each(fields_dict, (field, value) => frm.set_value(field, value));
+			}
+
 			// It's necessary to clear the table everytime you change 'tipo de factura' to guarantee an accurate price list
 			!frm.doc.is_return && frm.clear_table('items');
 			//frm.add_child('items', {})
@@ -460,6 +498,16 @@ frappe.ui.form.on("Sales Invoice", {
 			return;
 		}
 
+		// En una devolucion los montos de la linea vienen de la factura original y
+		// no se re-derivan: apply_copago_discount escribe discount_amount /
+		// margin_rate_or_amount, o sea reescribe el rate, y ERPNext no acepta que
+		// el rate de una devolucion supere el de la factura. Los totales del
+		// header si se recalculan, por si se borran lineas.
+		if (frm.doc.is_return) {
+			frm.trigger("refresh_outside_amounts");
+			return;
+		}
+
 		const apply_pct = aplicar_porciento(row);
 		const cobertura = flt(row.cobertura) / 100.0;
 		// La oferta de jueves manda toda la brecha al copago y deja la diferencia
@@ -504,23 +552,39 @@ frappe.ui.form.on("Sales Invoice", {
 		let total_difference_amount = 0.0;
 		let total_copago_amount     = 0.0;
 
+		// Mismo criterio que rades.sales_invoice._apply_return_sign en el servidor:
+		// en una nota de credito estos montos van en negativo, igual que amount y
+		// grand_total. Antes se mostraban en positivo contra un Grand Total
+		// negativo, y los reportes que los suman contaban la NC como una venta.
+		const sign = frm.doc.is_return ? -1 : 1;
+
 		$.map(frm.doc.items || [], (row) => {
-			total_authorized_amount += flt(row.authorized_amount);
-			total_claimed_amount    += flt(row.claimed_amount);
-			total_difference_amount += flt(row.difference_amount);
-			total_copago_amount     += flt(row.copago);
+			total_authorized_amount += Math.abs(flt(row.authorized_amount));
+			total_claimed_amount    += Math.abs(flt(row.claimed_amount));
+			total_difference_amount += Math.abs(flt(row.difference_amount));
+			total_copago_amount     += Math.abs(flt(row.copago));
 		});
+
+		total_authorized_amount *= sign;
+		total_claimed_amount    *= sign;
+		total_difference_amount *= sign;
+		total_copago_amount     *= sign;
 
 		frm.set_value("monto_reclamado", flt(total_claimed_amount, 2));
 		frm.set_value("monto_autorizado", flt(total_authorized_amount, 2));
 		frm.set_value("diferencia", flt(total_difference_amount, 2));
 		frm.set_value("copago", flt(total_copago_amount, 2));
 
-		rades.sales_invoice.update_payment_table(frm, {
-			"total_authorized_amount": total_authorized_amount,
-			"total_copago": total_copago_amount,
-			"total_difference_amount": total_difference_amount,
-		});
+		// La tabla de pagos de una devolucion es el desglose de la factura
+		// original en negativo, no algo que se derive de los montos de aqui.
+		// La reconstruye rades.sales_invoice._restore_return_payments al guardar.
+		if (!frm.doc.is_return) {
+			rades.sales_invoice.update_payment_table(frm, {
+				"total_authorized_amount": total_authorized_amount,
+				"total_copago": total_copago_amount,
+				"total_difference_amount": total_difference_amount,
+			});
+		}
 
 		refresh_field("items");
 	},
@@ -551,6 +615,12 @@ frappe.ui.form.on("Sales Invoice Item", {
 
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
+			// Con use_legacy_js_reactivity = 0, ERPNext resuelve el item en el
+			// servidor (process_item_selection) y al volver sincroniza la linea
+			// completa con authorized_amount = 0. El timeout solo da tiempo a que esa
+			// llamada salga; hay que esperar su respuesta o pisa el calculo. Pasaba
+			// cuando el servidor tardaba mas de 0.3 s (FACT-95232: Autorizado 0.00).
+			() => frappe.after_ajax(),
 			() => condition && frm.events.item_table_update(frm, cdt, cdn),
 			() => frappe.timeout(1.3),
 			// Antes este paso corria solo para Alquiler y leia una variable `row`
@@ -592,9 +662,16 @@ frappe.ui.form.on("Sales Invoice Item", {
 	"rate": (frm, cdt, cdn) => {
 		frappe.run_serially([
 			() => frappe.timeout(0.3),
-			() => is_insurance_invoice(frm)
-				? frm.events.item_table_update(frm, cdt, cdn)
-				: sync_outside_amounts_from_rate(frm, cdt, cdn),
+			() => {
+				if (!is_insurance_invoice(frm)) {
+					return sync_outside_amounts_from_rate(frm, cdt, cdn);
+				}
+				// En seguros el Monto tambien se teclea a mano, pero todo el
+				// calculo parte de la tarifa base: hay que rebasarla primero o
+				// item_table_update recalcula sobre la tarifa vieja.
+				rebase_insurance_line_from_rate(frm, cdt, cdn);
+				return frm.events.item_table_update(frm, cdt, cdn);
+			},
 		]);
 	},
 	// Margen, descuento y precio de lista tambien mueven el rate y ninguno tenia
@@ -794,6 +871,14 @@ function sync_outside_amounts_from_rate(frm, cdt, cdn) {
 	// hace item_table_update; aqui no se toca nada.
 	if (is_insurance_invoice(frm)) return;
 
+	// En devoluciones los montos se heredan de la factura original; el servidor
+	// solo les pone el signo. Recalcularlos aqui desde el rate los devolveria a
+	// positivo en cada render.
+	if (frm.doc.is_return) {
+		frm.trigger("refresh_outside_amounts");
+		return;
+	}
+
 	const row = frappe.get_doc(cdt, cdn);
 	if (!row || !row.item_code) return;
 
@@ -834,6 +919,62 @@ function ensure_price_list_rate(row) {
 	}
 
 	return base;
+}
+
+// Monto (rate) que el calculo de seguros derivaria de la linea tal como esta:
+// tarifa base menos el descuento por referido menos el copago. Es exactamente lo
+// que apply_copago_discount deja en el rate, y sirve para distinguir un rate
+// escrito por el usuario de uno que puso el propio calculo.
+function insurance_derived_rate(row) {
+	const base = get_base_rate(row);
+	const referral_discount = (base * flt(row.__referral_pct)) / 100.0;
+	return flt(base - referral_discount - flt(row.copago), 2);
+}
+
+// El Monto de una linea de seguro es un valor DERIVADO de la tarifa base
+// (price_list_rate): autorizado = base x cobertura, diferencia = base -
+// autorizado - copago, y el rate se arma restandole el copago a la base.
+//
+// Cuando el usuario teclea el Monto, ERPNext lo absorbe como discount_percentage
+// sobre la tarifa vieja y nada mas cambia: autorizado y diferencia se quedaban
+// en la tarifa anterior y apply_copago_discount devolvia el rate a su valor
+// derivado (o al de la edicion anterior, si __referral_pct ya habia capturado un
+// descuento manual previo). Asi se guardo FACT-170927: Monto 642 con autorizado
+// 770.40 + diferencia 85.60 = 856, o sea reclamandole al seguro mas que el total
+// de la linea, y pagos (3,852 + 428) por encima del grand total de 4,066.
+//
+// Aqui manda el Monto tecleado: pasa a ser la tarifa base de la linea y el resto
+// del calculo se re-deriva desde ahi. El copago se sigue restando del Monto, por
+// eso la base lo incluye. Un descuento por referido previo se descarta a
+// proposito: el precio tecleado ya es el precio final negociado de la linea.
+function rebase_insurance_line_from_rate(frm, cdt, cdn) {
+	const row = frappe.get_doc(cdt, cdn);
+	if (!row || !row.item_code) return false;
+
+	// En devoluciones los montos se heredan de la factura original y el rate no
+	// puede superar el de la factura; aqui no se rebasa nada.
+	if (frm.doc.is_return) return false;
+
+	const typed_rate = flt(row.rate, 2);
+	if (!typed_rate) return false;
+
+	// Sin cambio real: el rate lo puso el propio calculo (copago, cobertura,
+	// lista de precios). Rebasar aqui movería la tarifa en cada vuelta.
+	if (Math.abs(typed_rate - insurance_derived_rate(row)) < 0.005) return false;
+
+	row.price_list_rate = flt(typed_rate + flt(row.copago), 2);
+	// ERPNext ya reescribio estos campos con el descuento implicito de la
+	// edicion manual (1 - rate/price_list_rate). Contra la tarifa nueva no
+	// significan nada, y si sobreviven apply_copago_discount los vuelve a
+	// aplicar sobre la base rebasada.
+	row.__referral_pct = 0;
+	row.discount_percentage = 0;
+	row.discount_amount = 0;
+	row.margin_type = "";
+	row.margin_rate_or_amount = 0;
+	row.rate_with_margin = 0;
+
+	return true;
 }
 
 function apply_copago_discount(frm, cdt, cdn) {

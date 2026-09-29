@@ -1,0 +1,34 @@
+[
+ {
+  "creation": "2026-06-29 10:37:41.799878",
+  "docstatus": 0,
+  "doctype": "Client Script",
+  "dt": "Journal Entry",
+  "enabled": 1,
+  "example": "<h3>Custom Script Help</h3>\n<p>Custom Scripts are executed only on the client-side (i.e. in Forms). Here are some examples to get you started</p>\n<pre><code>\n\n// fetch local_tax_no on selection of customer\n// cur_frm.add_fetch(link_field, source_fieldname, target_fieldname);\ncur_frm.add_fetch(\"customer\", \"local_tax_no\", \"local_tax_no\");\n\n// additional validation on dates\nfrappe.ui.form.on(\"Task\", \"validate\", function(frm) {\n    if (frm.doc.from_date &lt; get_today()) {\n        msgprint(\"You can not select past date in From Date\");\n        validated = false;\n    }\n});\n\n// make a field read-only after saving\nfrappe.ui.form.on(\"Task\", {\n    refresh: function(frm) {\n        // use the __islocal value of doc, to check if the doc is saved or not\n        frm.set_df_property(\"myfield\", \"read_only\", frm.doc.__islocal ? 0 : 1);\n    }\n});\n\n// additional permission check\nfrappe.ui.form.on(\"Task\", {\n    validate: function(frm) {\n        if(user==\"user1@example.com\" &amp;&amp; frm.doc.purpose!=\"Material Receipt\") {\n            msgprint(\"You are only allowed Material Receipt\");\n            validated = false;\n        }\n    }\n});\n\n// calculate sales incentive\nfrappe.ui.form.on(\"Sales Invoice\", {\n    validate: function(frm) {\n        // calculate incentives for each person on the deal\n        total_incentive = 0\n        $.each(frm.doc.sales_team), function(i, d) {\n\n            // calculate incentive\n            var incentive_percent = 2;\n            if(frm.doc.base_grand_total &gt; 400) incentive_percent = 4;\n\n            // actual incentive\n            d.incentives = flt(frm.doc.base_grand_total) * incentive_percent / 100;\n            total_incentive += flt(d.incentives)\n        });\n\n        frm.doc.total_incentive = total_incentive;\n    }\n})\n\n</code>\n</pre>",
+  "idx": 0,
+  "modified": "2026-06-29 10:39:18.895657",
+  "modified_by": "Administrator",
+  "module": "Rades",
+  "name": "Journal Entry - Mode of Payment desde Entry Type",
+  "owner": "Administrator",
+  "script": "// csrd: al cambiar Entry Type o agregar fila, copia voucher_type a\n// mode_of_payment de las lineas si existe un Mode of Payment con el mismo nombre.\n\nfunction set_mode_of_payment_on_rows(frm, rows) {\n\tconst entry_type = frm.doc.voucher_type;\n\tif (!entry_type || !rows.length) {\n\t\treturn;\n\t}\n\n\tfrappe.db.exists(\"Mode of Payment\", entry_type).then((exists) => {\n\t\tif (!exists) {\n\t\t\treturn;\n\t\t}\n\n\t\trows.forEach((row) => {\n\t\t\tfrappe.model.set_value(row.doctype, row.name, \"mode_of_payment\", entry_type);\n\t\t});\n\t});\n}\n\nfrappe.ui.form.on(\"Journal Entry\", {\n\tvoucher_type(frm) {\n\t\tset_mode_of_payment_on_rows(frm, frm.doc.accounts || []);\n\t},\n\n\taccounts_add(frm, cdt, cdn) {\n\t\tconst row = frappe.get_doc(cdt, cdn);\n\t\tset_mode_of_payment_on_rows(frm, [row]);\n\t},\n});",
+  "view": "Form"
+ },
+ {
+  "creation": "2026-06-02 09:21:40.589927",
+  "docstatus": 0,
+  "doctype": "Client Script",
+  "dt": "Sales Invoice",
+  "enabled": 1,
+  "example": "<h3>Custom Script Help</h3>\n<p>Custom Scripts are executed only on the client-side (i.e. in Forms). Here are some examples to get you started</p>\n<pre><code>\n\n// fetch local_tax_no on selection of customer\n// cur_frm.add_fetch(link_field, source_fieldname, target_fieldname);\ncur_frm.add_fetch(\"customer\", \"local_tax_no\", \"local_tax_no\");\n\n// additional validation on dates\nfrappe.ui.form.on(\"Task\", \"validate\", function(frm) {\n    if (frm.doc.from_date &lt; get_today()) {\n        msgprint(\"You can not select past date in From Date\");\n        validated = false;\n    }\n});\n\n// make a field read-only after saving\nfrappe.ui.form.on(\"Task\", {\n    refresh: function(frm) {\n        // use the __islocal value of doc, to check if the doc is saved or not\n        frm.set_df_property(\"myfield\", \"read_only\", frm.doc.__islocal ? 0 : 1);\n    }\n});\n\n// additional permission check\nfrappe.ui.form.on(\"Task\", {\n    validate: function(frm) {\n        if(user==\"user1@example.com\" &amp;&amp; frm.doc.purpose!=\"Material Receipt\") {\n            msgprint(\"You are only allowed Material Receipt\");\n            validated = false;\n        }\n    }\n});\n\n// calculate sales incentive\nfrappe.ui.form.on(\"Sales Invoice\", {\n    validate: function(frm) {\n        // calculate incentives for each person on the deal\n        total_incentive = 0\n        $.each(frm.doc.sales_team), function(i, d) {\n\n            // calculate incentive\n            var incentive_percent = 2;\n            if(frm.doc.base_grand_total &gt; 400) incentive_percent = 4;\n\n            // actual incentive\n            d.incentives = flt(frm.doc.base_grand_total) * incentive_percent / 100;\n            total_incentive += flt(d.incentives)\n        });\n\n        frm.doc.total_incentive = total_incentive;\n    }\n})\n\n</code>\n</pre>",
+  "idx": 0,
+  "modified": "2026-06-02 10:05:02.924394",
+  "modified_by": "Administrator",
+  "module": null,
+  "name": "Sales Invoice - Monto Efectivo por tipo_de_factura",
+  "owner": "Administrator",
+  "script": "// csrd: gobierna el monto del modo de pago \"Efectivo\" segun el\n// tipo_de_factura. Reacciona en tipo_de_factura, en refresh_outside_amounts\n// (que el app dispara al cambiar items) y en validate como red de seguridad.\n//\n//   Clientes Privados  -> Efectivo = grand_total - otros pagos (pendiente)\n//   Proveedores        -> Efectivo = 0 (no se carga el monto pendiente)\n//   resto              -> sin tocar (lo gobierna el app)\n\nfrappe.ui.form.on(\"Sales Invoice\", {\n    tipo_de_factura(frm) { aplicar(frm); },\n    refresh_outside_amounts(frm) { aplicar(frm); },\n    validate(frm) { aplicar(frm); },\n});\n\nfunction aplicar(frm) {\n    if (frm.doc.tipo_de_factura === \"Clientes Privados\") {\n        set_efectivo(frm, calcular_pendiente(frm));\n    } else if (frm.doc.tipo_de_factura === \"Proveedores\") {\n        set_efectivo(frm, 0);\n    }\n}\n\nfunction calcular_pendiente(frm) {\n    const otros = (frm.doc.payments || [])\n        .filter(p => p.mode_of_payment !== \"Efectivo\")\n        .reduce((s, p) => s + flt(p.amount || 0), 0);\n    return flt(frm.doc.grand_total) - otros;\n}\n\nfunction set_efectivo(frm, monto) {\n    let row = (frm.doc.payments || []).find(p => p.mode_of_payment === \"Efectivo\");\n    if (!row) {\n        row = frm.add_child(\"payments\", { mode_of_payment: \"Efectivo\" });\n    }\n    if (flt(row.amount) !== flt(monto)) {\n        frappe.model.set_value(row.doctype, row.name, \"amount\", monto);\n    }\n}\n",
+  "view": "Form"
+ }
+]

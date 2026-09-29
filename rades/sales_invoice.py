@@ -118,11 +118,135 @@ def _is_dgii_registered_encf(doc):
 INSURANCE_INVOICE_TYPES = ("Clientes Seguros", "Servimerd", "Meds")
 
 
+def _pending_mop_amount(total_amount_to_pay, total_paid_amount, precision=2):
+	"""Pendiente de pago redondeado a la precisión de la moneda.
+
+	Aislado para poder probar el residuo binario sin montar un documento.
+	"""
+	return flt(flt(total_amount_to_pay) - flt(total_paid_amount), precision)
+
+
+def _rounded_payments_total(payments, precision=2):
+	return flt(sum(flt(row.amount) for row in payments or []), precision)
+
+
+def _patch_pos_return_payment_rounding():
+	"""ERPNext compara los pagos de una NC POS sin redondear, en dos sitios.
+
+	Los montos de rades traen centavos (526.44 + 131.61) y la suma binaria da
+	-658.0500000000001 en vez de -658.05. Ese residuo de 1e-13 dispara dos
+	comprobaciones distintas de ERPNext, y de ahí que las notas de crédito
+	fallaran de forma aparentemente aleatoria: solo se rompen cuando los
+	importes concretos dejan residuo. FACT-170702 (540 + 135, exacto) pasaba y
+	FACT-170704 (526.44 + 131.61) no.
+
+	Ambos parches solo redondean a la precisión de la moneda antes de comparar;
+	no cambian ninguna otra decisión. Son a nivel de proceso, así que aplican a
+	todos los sitios del bench: comparar importes de dinero sin redondear está
+	mal en cualquiera de ellos.
+	"""
+	_preserve_pos_return_payments()
+	_relax_pos_return_total_check()
+
+
+def _relax_pos_return_total_check():
+	"""validate_pos_return: `total_amount_in_payments < invoice_total` sin redondear.
+
+	Reimplementa el método de ERPNext tal cual, con la única diferencia de
+	redondear ambos lados antes de compararlos. Si no, una nota cuyos pagos
+	cuadran exactamente se rechaza con "El monto total de los pagos no puede ser
+	mayor que ...".
+	"""
+	from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
+
+	if getattr(SalesInvoice, "__rades_rounds_pos_return_total", False):
+		return
+
+	def validate_pos_return(self):
+		if self.is_consolidated:
+			# pos return is already validated in pos invoice
+			return
+
+		if self.is_pos and self.is_return:
+			precision = self.precision("grand_total")
+			total_amount_in_payments = _rounded_payments_total(self.payments, precision)
+			invoice_total = flt(self.rounded_total or self.grand_total, precision)
+			if total_amount_in_payments < invoice_total:
+				frappe.throw(_("Total payments amount can't be greater than {}").format(-invoice_total))
+
+	SalesInvoice.validate_pos_return = validate_pos_return
+	SalesInvoice.__rades_rounds_pos_return_total = True
+
+
+def _preserve_pos_return_payments():
+	"""Evita que ERPNext borre el desglose de pagos de una NC POS por redondeo.
+
+	calculate_taxes_and_totals.set_total_amount_to_default_mop compara
+	`pending_amount > 0` sin redondear. Cuando los pagos de la devolución ya
+	cuadran con el total, la resta deja un residuo binario -en FACT-170704,
+	-526.44 + -131.61 contra -658.05 da 1.1e-13- y ERPNext entiende que falta
+	por pagar: vacía la tabla de pagos y la reemplaza por una sola fila con ese
+	residuo en positivo. Eso es lo que se ve como "los pagos se ponen en 0", y
+	acto seguido verify_payment_amount_is_negative rechaza la nota.
+
+	Redondear el pendiente antes de decidir deja el caso exacto en 0 y conserva
+	el desglose; un pendiente real sigue llegando al comportamiento original.
+
+	Es el equivalente en el servidor de preserve_pos_return_payment_distribution
+	del JS. El parche es a nivel de proceso, así que aplica a todos los sitios
+	del bench: solo suprime el colapso cuando los pagos ya cuadran, que es
+	destructivo en cualquier caso.
+	"""
+	from erpnext.controllers.taxes_and_totals import calculate_taxes_and_totals
+
+	if getattr(calculate_taxes_and_totals, "__rades_preserves_return_payments", False):
+		return
+
+	original = calculate_taxes_and_totals.set_total_amount_to_default_mop
+
+	def set_total_amount_to_default_mop(self, total_amount_to_pay):
+		total_paid_amount = sum(
+			payment.amount
+			if self.doc.party_account_currency == self.doc.currency
+			else payment.base_amount
+			for payment in self.doc.get("payments")
+		)
+
+		pendiente = _pending_mop_amount(
+			total_amount_to_pay,
+			total_paid_amount,
+			self.doc.precision("grand_total"),
+		)
+		if not pendiente:
+			return
+
+		return original(self, total_amount_to_pay)
+
+	calculate_taxes_and_totals.set_total_amount_to_default_mop = set_total_amount_to_default_mop
+	calculate_taxes_and_totals.__rades_preserves_return_payments = True
+
+
+def before_validate(self, event=None):
+	"""Los pagos se arreglan ANTES de que ERPNext calcule totales.
+
+	calculate_taxes_and_totals / calculate_outstanding_amount corren dentro del
+	validate del propio doctype, que se ejecuta antes que este hook de app. Si
+	se tocaran los pagos en `validate` quedarían paid_amount y
+	outstanding_amount calculados con los valores viejos.
+	"""
+	_patch_pos_return_payment_rounding()
+	_restore_return_payments(self)
+	_normalize_return_payment_signs(self)
+
+
 def validate(self, event=None):
 	_restore_seguro_selling_price_list(self)
 	_validate_full_credit_note(self)
 	_recalculate_header_copago(self)
 	_recalculate_outside_amounts(self)
+	# Último: los tres pasos anteriores razonan en magnitudes; el signo del
+	# documento se aplica una sola vez y al final.
+	_apply_return_sign(self)
 
 
 def _restore_seguro_selling_price_list(doc):
@@ -281,6 +405,157 @@ def _recalculate_header_copago(doc):
 	doc.copago = total_copago
 
 
+# Montos custom de la línea que en una nota de crédito van en negativo, igual que
+# `amount`. `copago` NO está aquí: es un dato de entrada cuyo signo ya significa
+# algo (positivo = descuenta de la brecha, negativo = recarga), y difference_amount
+# se calcula como rate - copago.
+RETURN_SIGNED_ITEM_FIELDS = ("claimed_amount", "authorized_amount", "difference_amount")
+
+
+def _negativo(valor):
+	"""Magnitud con signo de nota de crédito. El `or 0.0` evita guardar -0.0."""
+	return -abs(flt(valor)) or 0.0
+
+
+def _apply_return_sign(doc):
+	"""En una nota de crédito los montos custom van en negativo, como amount.
+
+	Se limita a fijar el signo: la magnitud viene copiada de la factura original
+	y volver a derivarla desde precios es justo lo que rompía las NC de seguros
+	(el formulario re-cotizaba la línea y el rate superaba el de la factura).
+
+	Se usa -abs() a propósito. Es idempotente -validate corre en cada save- y los
+	tres campos son magnitudes no negativas en una factura normal
+	(authorized = base * cobertura, claimed = base, difference = brecha).
+
+	No altera lo fiscal: alanube.adjust_return_values hace abs() de qty y de
+	difference_amount antes de armar el e-CF. Sí corrige los reportes
+	(ingresos_promedio, registro_de_ventas), que suman estos campos sin filtrar
+	is_return y hoy cuentan cada nota de crédito como si fuera una venta más.
+	"""
+	if not cint(doc.get("is_return")):
+		return
+
+	items = doc.get("items") or []
+	for item in items:
+		for field in RETURN_SIGNED_ITEM_FIELDS:
+			setattr(item, field, _negativo(item.get(field)))
+
+	doc.monto_reclamado = flt(sum(flt(it.get("claimed_amount")) for it in items), 2)
+	doc.monto_autorizado = flt(sum(flt(it.get("authorized_amount")) for it in items), 2)
+	doc.diferencia = flt(sum(flt(it.get("difference_amount")) for it in items), 2)
+	doc.copago = _negativo(doc.get("copago"))
+
+
+def _is_pos_return(doc):
+	return bool(cint(doc.get("is_pos")) and cint(doc.get("is_return")))
+
+
+def _should_restore_return_payments(doc):
+	"""True si a una NC POS hay que devolverle el desglose de pagos del original.
+
+	La regla es "los pagos no suman el total", no "los pagos están en cero". Al
+	abrir una devolución el formulario reinicia la tabla con los modos del POS
+	Profile en 0.00, pero ERPNext también colapsa el desglose sobre el modo por
+	defecto al recalcular: FACT-170704 quedaba con una sola fila en -1.1e-13 y
+	FACT-170543 se emitió con pagos por -1,374.18 contra un total de -1,974.15.
+	En una factura POS los pagos siempre cuadran con el total, así que cualquier
+	desvío significa tabla perdida.
+	"""
+	if not _is_pos_return(doc) or not doc.get("return_against"):
+		return False
+
+	total = flt(doc.get("grand_total"))
+	if not total:
+		# Documento a medio armar: sin total no hay contra qué comparar, y
+		# prorratear contra 0 borraría los pagos.
+		return False
+
+	pagado = flt(sum(flt(row.get("amount")) for row in (doc.get("payments") or [])), 2)
+	return pagado != flt(total, 2)
+
+
+def _scale_payment_rows(rows, target_total, conversion_rate=1.0):
+	"""Escala las filas a `target_total` y cuadra el redondeo en la fila mayor."""
+	actual = flt(sum(row["amount"] for row in rows), 2)
+	if not rows or not actual or actual == flt(target_total, 2):
+		return rows
+
+	ratio = target_total / actual
+	for row in rows:
+		row["amount"] = flt(row["amount"] * ratio, 2)
+		row["base_amount"] = flt(row["amount"] * conversion_rate, 2)
+
+	# Prorratear a 2 decimales casi nunca suma exacto (1/3 de 100, por ejemplo).
+	# El sobrante se absorbe en la fila de mayor monto para que la suma sea
+	# idéntica al grand_total: si no, ERPNext deja outstanding_amount != 0.
+	sobrante = flt(target_total - sum(row["amount"] for row in rows), 2)
+	if sobrante:
+		mayor = max(rows, key=lambda row: abs(row["amount"]))
+		mayor["amount"] = flt(mayor["amount"] + sobrante, 2)
+		mayor["base_amount"] = flt(mayor["amount"] * conversion_rate, 2)
+
+	return rows
+
+
+def _return_payment_rows(source, target_total=None):
+	"""Filas de pago de una NC: las de la factura original, en negativo.
+
+	`target_total` prorratea las devoluciones parciales. En una devolución total
+	la razón es 1 y las filas quedan idénticas a las del original.
+	"""
+	conversion_rate = flt(source.get("conversion_rate")) or 1.0
+	rows = []
+
+	for data in source.get("payments") or []:
+		amount = flt(data.get("amount"))
+		base_amount = flt(data.get("base_amount")) or flt(amount * conversion_rate)
+		rows.append(
+			{
+				"mode_of_payment": data.get("mode_of_payment"),
+				"type": data.get("type"),
+				"amount": -abs(amount),
+				"base_amount": -abs(base_amount),
+				"account": data.get("account"),
+				"default": data.get("default"),
+			}
+		)
+
+	if target_total is None:
+		return rows
+
+	return _scale_payment_rows(rows, -abs(flt(target_total)), conversion_rate)
+
+
+def _restore_return_payments(doc, source=None):
+	if not _should_restore_return_payments(doc):
+		return
+
+	source = source or frappe.get_doc("Sales Invoice", doc.get("return_against"))
+	rows = _return_payment_rows(source, target_total=doc.get("grand_total"))
+
+	if not rows or not flt(sum(row["amount"] for row in rows), 2):
+		# La factura original no tiene un desglose utilizable: no hay nada que
+		# reconstruir y repartir el total a mano sería inventar el medio de pago.
+		return
+
+	doc.set("payments", [])
+	for row in rows:
+		doc.append("payments", row)
+
+	doc.paid_amount = flt(sum(row["amount"] for row in rows), 2)
+
+
+def _normalize_return_payment_signs(doc):
+	"""ERPNext reparte los pagos POS en positivo también en devoluciones."""
+	if not _is_pos_return(doc):
+		return
+
+	for row in doc.get("payments") or []:
+		row.amount = -abs(flt(row.amount))
+		row.base_amount = -abs(flt(row.base_amount))
+
+
 def autoname(self, event):
 	self.name = make_autoname("FACT-.#####")
 	# Only fill ncf via naming_series as a last-resort fallback when dgii's
@@ -312,7 +587,8 @@ def update_personal_info(self):
 	inv.update({
 		"nss": cust.nss,
 		"tax_id": cust.tax_id,
-		"ars": cust.ars
+		"ars": cust.ars,
+		"customer_name": cust.customer_name,
 	})
 	inv.db_update()
 	frappe.db.commit()
@@ -354,20 +630,8 @@ def _normalize_pos_return_payments(credit_note, source):
 		return
 
 	credit_note.set("payments", [])
-	for data in source.get("payments") or []:
-		amount = flt(data.amount)
-		base_amount = flt(data.base_amount) or flt(amount * source.conversion_rate)
-		credit_note.append(
-			"payments",
-			{
-				"mode_of_payment": data.mode_of_payment,
-				"type": data.type,
-				"amount": -abs(amount),
-				"base_amount": -abs(base_amount),
-				"account": data.account,
-				"default": data.default,
-			},
-		)
+	for row in _return_payment_rows(source):
+		credit_note.append("payments", row)
 
 	credit_note.paid_amount = -abs(flt(source.paid_amount))
 

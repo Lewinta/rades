@@ -123,6 +123,7 @@ fixtures = [
 doc_events = {
 	"Sales Invoice": {
 		"autoname": "rades.sales_invoice.autoname",
+		"before_validate": "rades.sales_invoice.before_validate",
 		"validate": "rades.sales_invoice.validate",
 		"before_cancel": "rades.sales_invoice.before_cancel",
 		"on_submit": "rades.sales_invoice.on_submit",
